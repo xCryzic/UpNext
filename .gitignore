@@ -1,9 +1,17 @@
-node_modules
-dist
+node_modules/
+.venv/
+dist/
+
 .env
-.env.local
-# SQLite runtime data is local state; the canonical path is backend/data/upnext.db.
+.env.*
+!.env.example
+
+backend/.env
 backend/data/*.db
 data/*.db
+
+__pycache__/
+*.pyc
+
 .vscode/
 *.tsbuildinfo
