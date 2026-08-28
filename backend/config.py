@@ -33,3 +33,6 @@ class Config:
     SESSION_COOKIE_SECURE = os.getenv("SESSION_COOKIE_SECURE", "0") == "1"
     DEBUG = os.getenv("FLASK_DEBUG", "0") == "1"
     EXPOSE_DB_INFO = os.getenv("EXPOSE_DB_INFO", "0") == "1"
+    GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID", "")
+    GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET", "")
+    GITHUB_OAUTH_CALLBACK_URL = os.getenv("GITHUB_OAUTH_CALLBACK_URL", "")

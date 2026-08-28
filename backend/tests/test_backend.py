@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from app import create_app
 
@@ -13,6 +14,9 @@ class TestConfig:
     SESSION_COOKIE_SAMESITE = "Lax"
     SESSION_COOKIE_SECURE = False
     EXPOSE_DB_INFO = False
+    GITHUB_CLIENT_ID = "test-client-id"
+    GITHUB_CLIENT_SECRET = "test-client-secret"
+    GITHUB_OAUTH_CALLBACK_URL = "http://localhost:5000/api/creator/socials/github/callback"
 
 
 class BackendTestCase(unittest.TestCase):
@@ -103,6 +107,76 @@ class BackendTestCase(unittest.TestCase):
         self.assertEqual(self.client.get("/api/creator/me").status_code, 401)
         self.assertEqual(self.client.post("/api/creator", json={}).status_code, 401)
         self.assertEqual(self.client.post("/api/reports", json={}).status_code, 401)
+
+    def github_social(self, username="maker"):
+        return self.client.post("/api/creator/socials", json={"platform": "GitHub", "username": username, "profile_url": f"https://github.com/{username}"}).json["social_account"]
+
+    def start_github_verification(self, social_id):
+        response = self.client.get(f"/api/creator/socials/{social_id}/verify/github")
+        self.assertEqual(response.status_code, 302)
+        with self.client.session_transaction() as session:
+            return session["github_oauth_state"]
+
+    def test_github_verification_start_requires_ownership_and_github(self):
+        self.assertEqual(self.client.get("/api/creator/socials/1/verify/github").status_code, 401)
+        self.signup()
+        self.create_profile()
+        linkedin = self.client.post("/api/creator/socials", json={"platform": "LinkedIn", "username": "maker", "profile_url": "https://linkedin.com/in/maker"}).json["social_account"]
+        self.assertEqual(self.client.get(f"/api/creator/socials/{linkedin['id']}/verify/github").status_code, 400)
+        github = self.github_social()
+        self.client.post("/api/auth/logout")
+        self.signup("other@example.com")
+        self.create_profile("other-maker")
+        self.assertEqual(self.client.get(f"/api/creator/socials/{github['id']}/verify/github").status_code, 404)
+
+    def test_github_oauth_state_and_successful_ownership_verification(self):
+        self.signup()
+        self.create_profile()
+        social = self.github_social()
+        state = self.start_github_verification(social["id"])
+        with self.client.session_transaction() as session:
+            self.assertEqual(session["github_oauth_social_id"], social["id"])
+            self.assertTrue(session["github_oauth_state"])
+        with patch("routes.socials.github_token_exchange", return_value="temporary-token"), patch("routes.socials.github_authenticated_user", return_value={"login": "MAKER", "id": 12345}):
+            response = self.client.get(f"/api/creator/socials/github/callback?code=code&state={state}")
+        self.assertIn("github_verification=success", response.location)
+        updated = self.client.get("/api/creator/socials").json["social_accounts"][0]
+        self.assertTrue(updated["ownership_verified"])
+        self.assertEqual(updated["verification_status"], "verified")
+        self.assertTrue(updated["verified_at"])
+        self.assertNotIn("temporary-token", self.client.get("/api/creators/maker").text)
+        with self.client.session_transaction() as session:
+            self.assertNotIn("github_oauth_state", session)
+
+    def test_github_callback_rejects_bad_state_denial_and_mismatch(self):
+        self.signup()
+        self.create_profile()
+        social = self.github_social()
+        state = self.start_github_verification(social["id"])
+        bad = self.client.get("/api/creator/socials/github/callback?code=code&state=wrong")
+        self.assertIn("github_verification=failed", bad.location)
+        self.assertFalse(self.client.get("/api/creator/socials").json["social_accounts"][0]["ownership_verified"])
+        state = self.start_github_verification(social["id"])
+        denied = self.client.get(f"/api/creator/socials/github/callback?error=access_denied&state={state}")
+        self.assertIn("github_verification=denied", denied.location)
+        state = self.start_github_verification(social["id"])
+        with patch("routes.socials.github_token_exchange", return_value="temporary-token"), patch("routes.socials.github_authenticated_user", return_value={"login": "another-user", "id": 9}):
+            mismatch = self.client.get(f"/api/creator/socials/github/callback?code=code&state={state}")
+        self.assertIn("github_verification=failed", mismatch.location)
+        self.assertFalse(self.client.get("/api/creator/socials").json["social_accounts"][0]["ownership_verified"])
+
+    def test_editing_verified_github_identity_invalidates_verification(self):
+        self.signup()
+        self.create_profile()
+        social = self.github_social()
+        state = self.start_github_verification(social["id"])
+        with patch("routes.socials.github_token_exchange", return_value="temporary-token"), patch("routes.socials.github_authenticated_user", return_value={"login": "maker", "id": 12}):
+            self.client.get(f"/api/creator/socials/github/callback?code=code&state={state}")
+        updated = self.client.patch(f"/api/creator/socials/{social['id']}", json={"username": "other", "profile_url": "https://github.com/other"})
+        self.assertEqual(updated.status_code, 200)
+        self.assertFalse(updated.json["social_account"]["ownership_verified"])
+        self.assertEqual(updated.json["social_account"]["verification_status"], "unverified")
+        self.assertIsNone(updated.json["social_account"]["verified_at"])
 
 
 if __name__ == "__main__":

@@ -808,6 +808,10 @@ footer small {
   line-height: 1.5;
 }
 
+.oauth-notice { position: fixed; z-index: 1200; right: 20px; bottom: 20px; max-width: min(360px, calc(100vw - 40px)); padding: 12px 15px; border: 1px solid #cbd8cd; border-radius: 10px; background: #26362c; color: #fff; box-shadow: 0 12px 28px rgba(0, 0, 0, .16); font-size: .83rem; font-weight: 700; }
+.verified-indicator { display: inline-block; margin-left: 7px; color: #34735b; font-size: .68rem; font-weight: 800; }
+.item-list .verify-github { color: #315f50; }
+
 /* =========================================================
    AUTH SUBMIT
    ========================================================= */
