@@ -35,6 +35,17 @@ GitHub ownership verification uses the official OAuth web flow only for a creato
 
 The token is exchanged and used only by the backend to call GitHub's authenticated-user endpoint. It is never sent to the browser or stored in SQLite.
 
+### Spotify ownership verification (local)
+
+Spotify verification proves ownership of a Spotify **user account** only. It does not verify ownership of an artist profile and does not fetch followers, music, listening activity, or playlists.
+
+1. Create an app in the Spotify Developer Dashboard and add this exact Redirect URI: `http://127.0.0.1:5000/api/creator/socials/spotify/callback`.
+2. In `backend/.env`, set `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`, and `SPOTIFY_OAUTH_CALLBACK_URL` to that exact value.
+3. Add a Spotify social using the Spotify user ID for both the handle and a URL in the form `https://open.spotify.com/user/<user-id>`.
+4. Choose **Verify with Spotify** from profile management.
+
+UpNext requests only Spotify's `user-read-private` scope to call the current-user profile endpoint. The backend uses the temporary token once, stores the returned immutable `account_id` for the verified link, and discards access and refresh tokens. Spotify requires the explicit `127.0.0.1` loopback callback; do not substitute `localhost`.
+
 Run backend tests with:
 
 ```text
@@ -50,6 +61,6 @@ python -m unittest discover -s tests -v
 - Reports: `POST /api/reports`
 - Health: `GET /api/health`
 
-GitHub account ownership verification is implemented through OAuth. Other platforms, GitHub follower-count eligibility, and all other eligibility checks remain unimplemented. UpNext does not store external platform passwords, scrape platforms, or include likes, follows, feeds, messaging, or monetization in V0.
+GitHub and Spotify user-account ownership verification are implemented through OAuth. Spotify artist ownership, other platforms, follower-count eligibility, and all other eligibility checks remain unimplemented. UpNext does not store external platform passwords, scrape platforms, or include likes, follows, feeds, messaging, or monetization in V0.
 
 Privacy, terms, community guidelines, reporting, and account deletion documents remain launch placeholders and require proper review before public release.

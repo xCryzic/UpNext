@@ -17,6 +17,9 @@ class TestConfig:
     GITHUB_CLIENT_ID = "test-client-id"
     GITHUB_CLIENT_SECRET = "test-client-secret"
     GITHUB_OAUTH_CALLBACK_URL = "http://localhost:5000/api/creator/socials/github/callback"
+    SPOTIFY_CLIENT_ID = "test-spotify-client-id"
+    SPOTIFY_CLIENT_SECRET = "test-spotify-client-secret"
+    SPOTIFY_OAUTH_CALLBACK_URL = "http://127.0.0.1:5000/api/creator/socials/spotify/callback"
 
 
 class BackendTestCase(unittest.TestCase):
@@ -173,6 +176,75 @@ class BackendTestCase(unittest.TestCase):
         with patch("routes.socials.github_token_exchange", return_value="temporary-token"), patch("routes.socials.github_authenticated_user", return_value={"login": "maker", "id": 12}):
             self.client.get(f"/api/creator/socials/github/callback?code=code&state={state}")
         updated = self.client.patch(f"/api/creator/socials/{social['id']}", json={"username": "other", "profile_url": "https://github.com/other"})
+        self.assertEqual(updated.status_code, 200)
+        self.assertFalse(updated.json["social_account"]["ownership_verified"])
+        self.assertEqual(updated.json["social_account"]["verification_status"], "unverified")
+        self.assertIsNone(updated.json["social_account"]["verified_at"])
+
+    def spotify_social(self, user_id="maker"):
+        return self.client.post("/api/creator/socials", json={"platform": "Spotify", "username": user_id, "profile_url": f"https://open.spotify.com/user/{user_id}"}).json["social_account"]
+
+    def start_spotify_verification(self, social_id):
+        response = self.client.get(f"/api/creator/socials/{social_id}/verify/spotify")
+        self.assertEqual(response.status_code, 302)
+        with self.client.session_transaction() as session:
+            return session["spotify_oauth_state"]
+
+    def test_spotify_verification_start_requires_ownership_and_spotify(self):
+        self.assertEqual(self.client.get("/api/creator/socials/1/verify/spotify").status_code, 401)
+        self.signup()
+        self.create_profile()
+        github = self.github_social()
+        self.assertEqual(self.client.get(f"/api/creator/socials/{github['id']}/verify/spotify").status_code, 400)
+        spotify = self.spotify_social()
+        self.client.post("/api/auth/logout")
+        self.signup("other@example.com")
+        self.create_profile("other-maker")
+        self.assertEqual(self.client.get(f"/api/creator/socials/{spotify['id']}/verify/spotify").status_code, 404)
+
+    def test_spotify_oauth_state_success_and_immutable_account_id(self):
+        self.signup()
+        self.create_profile()
+        social = self.spotify_social()
+        state = self.start_spotify_verification(social["id"])
+        with self.client.session_transaction() as session:
+            self.assertEqual(session["spotify_oauth_social_id"], social["id"])
+        with patch("routes.socials.spotify_token_exchange", return_value="spotify-access-token"), patch("routes.socials.spotify_authenticated_user", return_value={"id": "maker", "account_id": "immutable-account-id"}):
+            response = self.client.get(f"/api/creator/socials/spotify/callback?code=code&state={state}")
+        self.assertIn("spotify_verification=success", response.location)
+        updated = self.client.get("/api/creator/socials").json["social_accounts"][0]
+        self.assertTrue(updated["ownership_verified"])
+        self.assertEqual(updated["verification_status"], "verified")
+        self.assertNotIn("spotify-access-token", self.client.get("/api/creators/maker").text)
+        connection = __import__("sqlite3").connect(self.db_path)
+        self.assertEqual(connection.execute("SELECT provider_account_id FROM social_accounts WHERE id = ?", (social["id"],)).fetchone()[0], "immutable-account-id")
+        self.assertEqual(connection.execute("SELECT count(*) FROM spotify_oauth_attempts").fetchone()[0], 0)
+        connection.close()
+
+    def test_spotify_callback_rejects_bad_state_denial_mismatch_and_token_failure(self):
+        self.signup()
+        self.create_profile()
+        social = self.spotify_social()
+        state = self.start_spotify_verification(social["id"])
+        self.assertIn("spotify_verification=failed", self.client.get("/api/creator/socials/spotify/callback?code=code&state=wrong").location)
+        state = self.start_spotify_verification(social["id"])
+        self.assertIn("spotify_verification=denied", self.client.get(f"/api/creator/socials/spotify/callback?error=access_denied&state={state}").location)
+        state = self.start_spotify_verification(social["id"])
+        with patch("routes.socials.spotify_token_exchange", return_value=None):
+            self.assertIn("spotify_verification=failed", self.client.get(f"/api/creator/socials/spotify/callback?code=code&state={state}").location)
+        state = self.start_spotify_verification(social["id"])
+        with patch("routes.socials.spotify_token_exchange", return_value="spotify-access-token"), patch("routes.socials.spotify_authenticated_user", return_value={"id": "other", "account_id": "other-account"}):
+            self.assertIn("spotify_verification=failed", self.client.get(f"/api/creator/socials/spotify/callback?code=code&state={state}").location)
+        self.assertFalse(self.client.get("/api/creator/socials").json["social_accounts"][0]["ownership_verified"])
+
+    def test_editing_verified_spotify_identity_invalidates_verification(self):
+        self.signup()
+        self.create_profile()
+        social = self.spotify_social()
+        state = self.start_spotify_verification(social["id"])
+        with patch("routes.socials.spotify_token_exchange", return_value="spotify-access-token"), patch("routes.socials.spotify_authenticated_user", return_value={"id": "maker", "account_id": "immutable-account-id"}):
+            self.client.get(f"/api/creator/socials/spotify/callback?code=code&state={state}")
+        updated = self.client.patch(f"/api/creator/socials/{social['id']}", json={"username": "other", "profile_url": "https://open.spotify.com/user/other"})
         self.assertEqual(updated.status_code, 200)
         self.assertFalse(updated.json["social_account"]["ownership_verified"])
         self.assertEqual(updated.json["social_account"]["verification_status"], "unverified")

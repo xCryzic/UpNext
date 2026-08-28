@@ -3,6 +3,7 @@ import json
 import re
 import secrets
 import sqlite3
+from base64 import b64encode
 from datetime import datetime, timezone
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlparse
@@ -14,12 +15,16 @@ from database import get_db
 from helpers.auth import require_login
 
 socials_bp = Blueprint("socials", __name__)
-PLATFORMS = {"Instagram", "TikTok", "YouTube", "GitHub", "X", "Twitch", "Behance", "Dribbble", "LinkedIn", "Website/Portfolio"}
+PLATFORMS = {"Instagram", "TikTok", "YouTube", "GitHub", "Spotify", "X", "Twitch", "Behance", "Dribbble", "LinkedIn", "Website/Portfolio"}
 URL_PATTERN = re.compile(r"^https?://[^\s]+$", re.IGNORECASE)
 GITHUB_AUTHORIZE_URL = "https://github.com/login/oauth/authorize"
 GITHUB_TOKEN_URL = "https://github.com/login/oauth/access_token"
 GITHUB_USER_URL = "https://api.github.com/user"
 OAUTH_SESSION_KEYS = ("github_oauth_state", "github_oauth_social_id", "github_oauth_claimed_login", "github_oauth_user_id")
+SPOTIFY_AUTHORIZE_URL = "https://accounts.spotify.com/authorize"
+SPOTIFY_TOKEN_URL = "https://accounts.spotify.com/api/token"
+SPOTIFY_PROFILE_URL = "https://api.spotify.com/v1/me"
+SPOTIFY_OAUTH_SESSION_KEYS = ("spotify_oauth_state", "spotify_oauth_social_id")
 
 
 def owned_creator(connection):
@@ -40,8 +45,14 @@ def clear_oauth_context():
         session.pop(key, None)
 
 
+def clear_spotify_oauth_context():
+    for key in SPOTIFY_OAUTH_SESSION_KEYS:
+        session.pop(key, None)
+
+
 def oauth_redirect(result):
-    return redirect(f"{current_app.config['FRONTEND_ORIGIN']}?github_verification={result}")
+    provider = "spotify" if "/spotify/" in request.path else "github"
+    return redirect(f"{current_app.config['FRONTEND_ORIGIN']}?{provider}_verification={result}")
 
 
 def github_login_from_claim(username, profile_url):
@@ -58,6 +69,24 @@ def github_login_from_claim(username, profile_url):
     if not url_login or not claimed_login or url_login.casefold() != claimed_login.casefold():
         return None
     return url_login.casefold()
+
+
+def spotify_user_id_from_claim(username, profile_url):
+    """Accept only Spotify *user* profile URLs; artist/catalog URLs are not identities."""
+    try:
+        parsed = urlparse(profile_url.strip())
+    except (AttributeError, ValueError):
+        return None
+    if parsed.scheme.lower() not in {"http", "https"} or parsed.netloc.lower() not in {"open.spotify.com", "www.open.spotify.com"}:
+        return None
+    parts = [part for part in parsed.path.split("/") if part]
+    if len(parts) != 2 or parts[0] != "user" or parsed.params or parsed.fragment:
+        return None
+    user_id = parts[1].strip()
+    claimed_id = str(username or "").strip()
+    if not user_id or not claimed_id or user_id != claimed_id:
+        return None
+    return user_id
 
 
 def validate(data):
@@ -92,6 +121,28 @@ def github_authenticated_user(access_token):
     except (HTTPError, URLError, TimeoutError, json.JSONDecodeError):
         return None
     return result if isinstance(result, dict) and result.get("login") and result.get("id") is not None else None
+
+
+def spotify_token_exchange(code):
+    credentials = b64encode(f"{current_app.config['SPOTIFY_CLIENT_ID']}:{current_app.config['SPOTIFY_CLIENT_SECRET']}".encode()).decode()
+    payload = urlencode({"grant_type": "authorization_code", "code": code, "redirect_uri": current_app.config["SPOTIFY_OAUTH_CALLBACK_URL"]}).encode()
+    outbound = Request(SPOTIFY_TOKEN_URL, data=payload, headers={"Authorization": f"Basic {credentials}", "Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json", "User-Agent": "UpNext-Spotify-Verification"}, method="POST")
+    try:
+        with urlopen(outbound, timeout=10) as response:
+            result = json.load(response)
+    except (HTTPError, URLError, TimeoutError, json.JSONDecodeError):
+        return None
+    return result.get("access_token") if isinstance(result, dict) else None
+
+
+def spotify_authenticated_user(access_token):
+    outbound = Request(SPOTIFY_PROFILE_URL, headers={"Authorization": f"Bearer {access_token}", "Accept": "application/json", "User-Agent": "UpNext-Spotify-Verification"})
+    try:
+        with urlopen(outbound, timeout=10) as response:
+            result = json.load(response)
+    except (HTTPError, URLError, TimeoutError, json.JSONDecodeError):
+        return None
+    return result if isinstance(result, dict) and result.get("id") and result.get("account_id") else None
 
 
 @socials_bp.get("/api/creator/socials")
@@ -148,7 +199,9 @@ def update_social(social_id):
         final_platform = updates.get("platform", row["platform"])
         final_username = updates.get("username", row["username"])
         final_url = updates.get("profile_url", row["profile_url"])
-        identity_changed = row["platform"] == "GitHub" and (final_platform != "GitHub" or github_login_from_claim(row["username"], row["profile_url"]) != github_login_from_claim(final_username, final_url))
+        original_identity = github_login_from_claim(row["username"], row["profile_url"]) if row["platform"] == "GitHub" else spotify_user_id_from_claim(row["username"], row["profile_url"]) if row["platform"] == "Spotify" else None
+        final_identity = github_login_from_claim(final_username, final_url) if final_platform == "GitHub" else spotify_user_id_from_claim(final_username, final_url) if final_platform == "Spotify" else None
+        identity_changed = row["platform"] in {"GitHub", "Spotify"} and (final_platform != row["platform"] or original_identity != final_identity)
         assignments = [f"{field} = ?" for field in updates]
         values = list(updates.values())
         if identity_changed:
@@ -227,6 +280,68 @@ def github_verification_callback():
         if not social or social["platform"] != "GitHub" or github_login_from_claim(social["username"], social["profile_url"]) != stored_claimed_login:
             return oauth_redirect("failed")
         connection.execute("UPDATE social_accounts SET ownership_verified = 1, verification_status = 'verified', verified_at = ?, provider_account_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (datetime.now(timezone.utc).isoformat(), str(github_user["id"]), social["id"]))
+        connection.commit()
+        return oauth_redirect("success")
+    finally:
+        connection.close()
+
+
+@socials_bp.get("/api/creator/socials/<int:social_id>/verify/spotify")
+@require_login
+def start_spotify_verification(social_id):
+    if not current_app.config.get("SPOTIFY_CLIENT_ID") or not current_app.config.get("SPOTIFY_CLIENT_SECRET") or not current_app.config.get("SPOTIFY_OAUTH_CALLBACK_URL"):
+        return jsonify({"error": "Spotify verification is not configured."}), 503
+    connection = get_db()
+    try:
+        social = get_owned_social(connection, social_id)
+        if not social:
+            return jsonify({"error": "Social account not found."}), 404
+        if social["platform"] != "Spotify":
+            return jsonify({"error": "Spotify verification is only available for Spotify user accounts."}), 400
+        claimed_user_id = spotify_user_id_from_claim(social["username"], social["profile_url"])
+        if not claimed_user_id:
+            return jsonify({"error": "Use a matching Spotify user ID and user URL such as https://open.spotify.com/user/your-user-id before verifying. Artist and catalog URLs cannot be verified here."}), 400
+        state = secrets.token_urlsafe(32)
+        # The session records the active flow. The database attempt also bridges Spotify's required 127.0.0.1 callback host.
+        session["spotify_oauth_state"] = state
+        session["spotify_oauth_social_id"] = social["id"]
+        connection.execute("DELETE FROM spotify_oauth_attempts WHERE social_id = ?", (social["id"],))
+        connection.execute("INSERT INTO spotify_oauth_attempts (state, social_id, user_id, claimed_user_id) VALUES (?, ?, ?, ?)", (state, social["id"], g.user_id, claimed_user_id))
+        connection.commit()
+        query = urlencode({"client_id": current_app.config["SPOTIFY_CLIENT_ID"], "response_type": "code", "redirect_uri": current_app.config["SPOTIFY_OAUTH_CALLBACK_URL"], "state": state, "scope": "user-read-private"})
+        return redirect(f"{SPOTIFY_AUTHORIZE_URL}?{query}")
+    finally:
+        connection.close()
+
+
+@socials_bp.get("/api/creator/socials/spotify/callback")
+def spotify_verification_callback():
+    received_state = request.args.get("state", "")
+    clear_spotify_oauth_context()
+    if not received_state:
+        return oauth_redirect("failed")
+    connection = get_db()
+    try:
+        attempt = connection.execute("SELECT * FROM spotify_oauth_attempts WHERE state = ?", (received_state,)).fetchone()
+        # Consume a valid attempt before exchanging a code: no OAuth state is reusable.
+        if attempt:
+            connection.execute("DELETE FROM spotify_oauth_attempts WHERE state = ?", (received_state,))
+            connection.commit()
+        if not attempt or not hmac.compare_digest(str(attempt["state"]), received_state):
+            return oauth_redirect("failed")
+        if request.args.get("error"):
+            return oauth_redirect("denied")
+        code = request.args.get("code")
+        if not code:
+            return oauth_redirect("failed")
+        access_token = spotify_token_exchange(code)
+        spotify_user = spotify_authenticated_user(access_token) if access_token else None
+        if not spotify_user or str(spotify_user["id"]) != attempt["claimed_user_id"]:
+            return oauth_redirect("failed")
+        social = connection.execute("SELECT social_accounts.* FROM social_accounts JOIN creators ON creators.id = social_accounts.creator_id WHERE social_accounts.id = ? AND creators.user_id = ?", (attempt["social_id"], attempt["user_id"])).fetchone()
+        if not social or social["platform"] != "Spotify" or spotify_user_id_from_claim(social["username"], social["profile_url"]) != attempt["claimed_user_id"]:
+            return oauth_redirect("failed")
+        connection.execute("UPDATE social_accounts SET ownership_verified = 1, verification_status = 'verified', verified_at = ?, provider_account_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (datetime.now(timezone.utc).isoformat(), str(spotify_user["account_id"]), social["id"]))
         connection.commit()
         return oauth_redirect("success")
     finally:

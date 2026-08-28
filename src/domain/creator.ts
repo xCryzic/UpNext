@@ -1,5 +1,5 @@
 export const categories = ["Artist", "Musician", "Developer", "Game Developer", "Video Creator", "Writer", "Photographer", "Designer", "3D Artist", "Other"] as const;
-export const socialPlatforms = ["Instagram", "TikTok", "YouTube", "GitHub", "X", "Twitch", "Behance", "Dribbble", "LinkedIn", "Website/Portfolio"] as const;
+export const socialPlatforms = ["Instagram", "TikTok", "YouTube", "GitHub", "Spotify", "X", "Twitch", "Behance", "Dribbble", "LinkedIn", "Website/Portfolio"] as const;
 export const lookingForOptions = ["Collaborators", "Freelance work", "Full-time opportunities", "Studios", "Recruiters", "Clients", "Fans / audience", "Publishers", "Investors", "Other"] as const;
 export type Category = (typeof categories)[number];
 export type VerificationStatus = "unverified" | "identity_verified" | "eligibility_verified" | string;

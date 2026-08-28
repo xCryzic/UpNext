@@ -134,6 +134,16 @@ def init_db(config=None):
                 FOREIGN KEY (creator_id) REFERENCES creators(id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS spotify_oauth_attempts (
+                state TEXT PRIMARY KEY,
+                social_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                claimed_user_id TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (social_id) REFERENCES social_accounts(id) ON DELETE CASCADE,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+
             """
         )
 
@@ -178,6 +188,7 @@ def init_db(config=None):
         connection.execute("CREATE INDEX IF NOT EXISTS idx_social_accounts_creator ON social_accounts(creator_id)")
         connection.execute("CREATE INDEX IF NOT EXISTS idx_projects_creator ON projects(creator_id)")
         connection.execute("CREATE INDEX IF NOT EXISTS idx_reports_creator ON reports(creator_id)")
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_spotify_oauth_attempts_social ON spotify_oauth_attempts(social_id)")
 
         connection.commit()
 
