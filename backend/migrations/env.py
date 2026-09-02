@@ -1,10 +1,10 @@
 from alembic import context
 from sqlalchemy import engine_from_config, pool
-from config import Config
+from database import database_url
 from models import Base
 
 config = context.config
-config.set_main_option("sqlalchemy.url", Config.DATABASE_URL or f"sqlite:///{Config.DATABASE_PATH}")
+config.set_main_option("sqlalchemy.url", database_url())
 target_metadata = Base.metadata
 def run_migrations_offline():
     context.configure(url=config.get_main_option("sqlalchemy.url"), target_metadata=target_metadata, literal_binds=True)

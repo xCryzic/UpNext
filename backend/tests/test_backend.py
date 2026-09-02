@@ -1,11 +1,13 @@
-import os
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from sqlalchemy import func, select
 
 from app import create_app
-from config import BASE_DIR, resolve_database_path, validate_configuration
+from config import validate_configuration
+from database import database_url, sqlalchemy_session
+from models import Creator, CreatorCategory, CreatorLookingFor, CreatorSkill, Project, Report, SocialAccount, User
 from services.discovery_service import calculate_profile_strength, sort_profiles
 from services.rate_limit import reset_rate_limits
 
@@ -13,7 +15,8 @@ from services.rate_limit import reset_rate_limits
 class TestConfig:
     APP_ENV = "development"
     SECRET_KEY = "test-secret"
-    DATABASE_PATH = Path(tempfile.gettempdir()) / "upnext-test.sqlite"
+    TEST_DATABASE_FILE = Path(tempfile.gettempdir()) / "upnext-test.sqlite"
+    DATABASE_URL = f"sqlite:///{TEST_DATABASE_FILE}"
     FRONTEND_ORIGIN = "http://localhost:5173"
     SESSION_COOKIE_HTTPONLY = True
     SESSION_COOKIE_SAMESITE = "Lax"
@@ -36,7 +39,7 @@ class TestConfig:
 class BackendTestCase(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.db_path = TestConfig.DATABASE_PATH
+        cls.db_path = TestConfig.TEST_DATABASE_FILE
         if cls.db_path.exists():
             cls.db_path.unlink()
 
@@ -228,10 +231,10 @@ class BackendTestCase(unittest.TestCase):
         self.assertTrue(updated["ownership_verified"])
         self.assertEqual(updated["verification_status"], "verified")
         self.assertNotIn("spotify-access-token", self.client.get("/api/creators/maker").text)
-        connection = __import__("sqlite3").connect(self.db_path)
-        self.assertEqual(connection.execute("SELECT provider_account_id FROM social_accounts WHERE id = ?", (social["id"],)).fetchone()[0], "immutable-account-id")
-        self.assertEqual(connection.execute("SELECT count(*) FROM spotify_oauth_attempts").fetchone()[0], 0)
-        connection.close()
+        db = sqlalchemy_session()
+        self.assertEqual(db.get(SocialAccount, social["id"]).provider_account_id, "immutable-account-id")
+        from models import SpotifyOAuthAttempt
+        self.assertEqual(db.scalar(select(func.count()).select_from(SpotifyOAuthAttempt)), 0)
 
     def test_spotify_callback_rejects_bad_state_denial_mismatch_and_token_failure(self):
         self.signup()
@@ -262,22 +265,16 @@ class BackendTestCase(unittest.TestCase):
         self.assertEqual(updated.json["social_account"]["verification_status"], "unverified")
         self.assertIsNone(updated.json["social_account"]["verified_at"])
 
-    def test_database_paths_are_backend_relative_and_cwd_independent(self):
-        original_cwd = Path.cwd()
-        try:
-            os.chdir(tempfile.gettempdir())
-            self.assertEqual(resolve_database_path("data/upnext.db"), BASE_DIR / "data" / "upnext.db")
-            self.assertEqual(resolve_database_path("backend/data/upnext.db"), BASE_DIR / "data" / "upnext.db")
-        finally:
-            os.chdir(original_cwd)
-        self.assertEqual(resolve_database_path(Path(tempfile.gettempdir()) / "upnext.sqlite"), Path(tempfile.gettempdir()) / "upnext.sqlite")
+    def test_development_database_url_uses_sqlalchemy_sqlite_fallback(self):
+        url = database_url({"APP_ENV": "development", "DATABASE_URL": ""})
+        self.assertTrue(url.startswith("sqlite:///"))
 
-    def test_production_configuration_requires_secret_and_absolute_database_path(self):
+    def test_production_configuration_requires_secret_and_database_url(self):
         with self.assertRaises(RuntimeError):
-            validate_configuration("production", "", "/data/upnext.db")
+            validate_configuration("production", "", "postgresql+psycopg://user:password@host/database")
         with self.assertRaises(RuntimeError):
-            validate_configuration("production", "test-secret", "data/upnext.db")
-        validate_configuration("production", "test-secret", "/data/upnext.db")
+            validate_configuration("production", "test-secret", "")
+        validate_configuration("production", "test-secret", "postgresql+psycopg://user:password@host/database")
 
     def test_signup_rate_limit_returns_json_429(self):
         self.app.config.update(RATE_LIMIT_ENABLED=True, RATE_LIMIT_SIGNUP_PER_MINUTE=1)
@@ -317,10 +314,9 @@ class BackendTestCase(unittest.TestCase):
         deleted = self.client.delete("/api/account")
         self.assertEqual(deleted.status_code, 200)
         self.assertIsNone(self.client.get("/api/auth/me").json["user"])
-        connection = __import__("sqlite3").connect(self.db_path)
-        for table in ("users", "creators", "social_accounts", "projects", "creator_categories", "creator_skills", "creator_looking_for", "reports"):
-            self.assertEqual(connection.execute(f"SELECT count(*) FROM {table}").fetchone()[0], 0, table)
-        connection.close()
+        db = sqlalchemy_session()
+        for model in (User, Creator, SocialAccount, Project, CreatorCategory, CreatorSkill, CreatorLookingFor, Report):
+            self.assertEqual(db.scalar(select(func.count()).select_from(model)), 0, model.__tablename__)
 
     def test_admin_moderation_requires_admin_and_can_hide_creator(self):
         self.signup("creator@example.com")
@@ -347,10 +343,11 @@ class BackendTestCase(unittest.TestCase):
         self.assertEqual(social.status_code, 201)
         self.assertEqual(self.client.get(f"/api/creator/socials/{social.json['social_account']['id']}/verify/youtube").status_code, 404)
 
-        connection = __import__("sqlite3").connect(self.db_path)
-        connection.execute("UPDATE social_accounts SET ownership_verified = 1, verification_status = 'verified' WHERE id = ?", (social.json["social_account"]["id"],))
-        connection.commit()
-        connection.close()
+        db = sqlalchemy_session()
+        stored_social = db.get(SocialAccount, social.json["social_account"]["id"])
+        stored_social.ownership_verified = True
+        stored_social.verification_status = "verified"
+        db.commit()
         creator = self.client.get("/api/creator/me").json["creator"]
         self.assertEqual(creator["verified_social_count"], 0)
 
@@ -363,10 +360,12 @@ class BackendTestCase(unittest.TestCase):
         self.assertEqual(initial["verified_social_count"], 0)
         initial_strength = initial["profile_strength"]
 
-        connection = __import__("sqlite3").connect(self.db_path)
-        connection.execute("UPDATE social_accounts SET ownership_verified = 1, verification_status = 'verified', provider_account_id = ? WHERE id = ?", ("private-provider-id", social["id"]))
-        connection.commit()
-        connection.close()
+        db = sqlalchemy_session()
+        stored_social = db.get(SocialAccount, social["id"])
+        stored_social.ownership_verified = True
+        stored_social.verification_status = "verified"
+        stored_social.provider_account_id = "private-provider-id"
+        db.commit()
         verified = self.client.get("/api/creators/maker").json["creator"]
         self.assertEqual(verified["verified_social_count"], 1)
         self.assertEqual(verified["profile_strength"], initial_strength + 5)

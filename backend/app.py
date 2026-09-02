@@ -4,7 +4,8 @@ from flask import Flask, jsonify, send_from_directory
 from flask_cors import CORS
 
 from config import Config
-from database import configure_sqlalchemy, get_db, init_db, remove_sqlalchemy_session
+from sqlalchemy import inspect
+from database import configure_sqlalchemy, init_db, remove_sqlalchemy_session
 from routes.auth import auth_bp
 from routes.account import account_bp
 from routes.admin import admin_bp
@@ -20,9 +21,11 @@ def create_app(config_class=Config):
     app.config.from_object(config_class)
     configure_sqlalchemy(app.config)
     CORS(app, origins=[app.config["FRONTEND_ORIGIN"]], supports_credentials=True)
-    with app.app_context():
-        init_db()
-    app.logger.info("Database path: %s", app.config["DATABASE_PATH"])
+    # Production schemas are created by Alembic, never implicitly at startup.
+    if app.config["APP_ENV"] != "production":
+        with app.app_context():
+            init_db(app.config)
+    app.logger.info("Database configured using %s.", (app.config.get("DATABASE_URL") or "development SQLite fallback").split(":", 1)[0])
 
     @app.teardown_appcontext
     def cleanup_sqlalchemy(_error=None):
@@ -44,12 +47,8 @@ def create_app(config_class=Config):
     def db_info():
         if not app.config.get("EXPOSE_DB_INFO", False):
             return jsonify({"error": "Not found."}), 404
-        connection = get_db()
-        try:
-            tables = connection.execute("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").fetchall()
-            return jsonify({"tables": [row["name"] for row in tables]})
-        finally:
-            connection.close()
+        from database import _engine
+        return jsonify({"tables": sorted(inspect(_engine).get_table_names())})
 
     @app.errorhandler(404)
     def not_found(_error):

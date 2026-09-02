@@ -1,6 +1,6 @@
-# UpNext V0 architecture (legacy future-state reference)
+# UpNext V0 architecture (archived reference)
 
-> The running application uses Flask and SQLite under `backend/`. This document and `db/schema.sql` describe an earlier PostgreSQL-oriented future design; neither is used at runtime.
+> Historical V0 planning document. The current application uses Flask, SQLAlchemy, and Alembic; production persistence is external PostgreSQL configured with `DATABASE_URL`. This document and `db/schema.sql` are not the runtime schema or migration source.
 
 ## Assessment and choice
 
@@ -47,7 +47,7 @@ Eligibility is time-bound. A provider may record `follower_count_at_verification
 
 The Flask backend lives under `backend/` and keeps the existing session auth endpoints intact. Route modules are split into `routes/auth.py`, `routes/creators.py`, `routes/socials.py`, `routes/projects.py`, and `routes/reports.py`; ownership checks are shared in `helpers/auth.py`, and discovery scoring is isolated in `services/discovery_service.py`.
 
-The SQLite initializer is migration-style and additive. It uses `CREATE TABLE IF NOT EXISTS`, checks existing columns with `PRAGMA table_info`, and applies only missing columns/indexes. It does not delete or recreate `backend/data/upnext.db`. Legacy creator records receive empty timestamp defaults and remain private to discovery until they satisfy publishability requirements.
+The historical SQLite initializer described here has been retired. Runtime schema management now uses Alembic migrations generated from `backend/models.py`.
 
 Public discovery only includes publishable profiles: a profile, display name, username, bio, category, skill, project, and social account are required. Ranking uses search/category relevance, profile completeness, and recency. Follower counts are never accepted as client-supplied verification and are only exposed when a trusted server-side process has marked eligibility verified.
 
@@ -61,4 +61,4 @@ python app.py
 python -m unittest discover -s tests -v
 ```
 
-The API listens on `http://127.0.0.1:5000`; the frontend origin is configured by `FRONTEND_ORIGIN`. Set `DATABASE_PATH` to move SQLite, `SESSION_COOKIE_SECURE=1` in a production configuration, and leave `EXPOSE_DB_INFO=0` unless the restricted development endpoint is explicitly needed.
+The API listens on `http://127.0.0.1:5000`; the frontend origin is configured by `FRONTEND_URL`. Development can use the SQLAlchemy SQLite fallback; production requires `DATABASE_URL`. Leave `EXPOSE_DB_INFO=0` unless the restricted development endpoint is explicitly needed.

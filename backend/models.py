@@ -1,10 +1,6 @@
-"""SQLAlchemy 2.x schema for the PostgreSQL migration branch.
-
-Routes still use the proven V1 storage layer until their corresponding
-SQLAlchemy conversion is complete and tested.
-"""
+"""SQLAlchemy 2.x schema for UpNext."""
 from datetime import datetime, timezone
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 def utcnow(): return datetime.now(timezone.utc)
@@ -27,3 +23,5 @@ class Report(Base):
     __tablename__="reports"; id:Mapped[int]=mapped_column(primary_key=True); reporter_user_id:Mapped[int]=mapped_column(ForeignKey("users.id",ondelete="CASCADE")); creator_id:Mapped[int]=mapped_column(ForeignKey("creators.id",ondelete="CASCADE"),index=True); reason:Mapped[str]=mapped_column(String(100)); details:Mapped[str]=mapped_column(Text,default=""); status:Mapped[str]=mapped_column(String(32),default="open"); created_at:Mapped[datetime]=mapped_column(DateTime(timezone=True),default=utcnow)
 class SpotifyOAuthAttempt(Base):
     __tablename__="spotify_oauth_attempts"; state:Mapped[str]=mapped_column(String(255),primary_key=True); social_id:Mapped[int]=mapped_column(ForeignKey("social_accounts.id",ondelete="CASCADE"),index=True); user_id:Mapped[int]=mapped_column(ForeignKey("users.id",ondelete="CASCADE")); claimed_user_id:Mapped[str]=mapped_column(String(255)); created_at:Mapped[datetime]=mapped_column(DateTime(timezone=True),default=utcnow)
+
+Index("idx_creators_updated_at", Creator.updated_at)

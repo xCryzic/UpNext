@@ -1,4 +1,5 @@
--- PostgreSQL V0 schema. Apply through the selected migration tool, not directly from the browser.
+-- Archived V0 design reference. Do not apply this file: the runtime schema is
+-- defined in backend/models.py and created through Alembic migrations.
 CREATE TYPE verification_status AS ENUM ('unverified', 'identity_verified', 'eligibility_verified');
 CREATE TYPE report_reason AS ENUM ('spam', 'impersonation', 'harassment', 'inappropriate_content', 'false_verification', 'other');
 CREATE TYPE report_status AS ENUM ('open', 'reviewing', 'resolved', 'dismissed');
