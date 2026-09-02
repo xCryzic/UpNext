@@ -158,7 +158,6 @@ def list_socials():
     finally:
         connection.close()
 
-
 @socials_bp.post("/api/creator/socials")
 @require_login
 def create_social():

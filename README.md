@@ -22,7 +22,7 @@ pip install -r requirements.txt
 python app.py
 ```
 
-The backend runs at `http://localhost:5000` (it also listens on `127.0.0.1`), and Vite runs at `http://localhost:5173`. Use `localhost` for both during HTTP development: mixing it with `127.0.0.1` can prevent the Flask `SameSite=Lax` session cookie from being sent. Backend configuration is read from `backend/.env`; SQLite defaults to the canonical `backend/data/upnext.db`. Database initialization is additive and does not require deleting the existing database. The repository-root `data/upnext.db` is a legacy artifact and is not read by the application; it is preserved rather than merged or removed automatically.
+The backend runs at `http://localhost:5000` (it also listens on `127.0.0.1`), and Vite runs at `http://localhost:5173`. Use `localhost` for both during HTTP development: mixing it with `127.0.0.1` can prevent the Flask `SameSite=Lax` session cookie from being sent. Backend configuration is read from `backend/.env`; SQLite defaults to the canonical `backend/data/upnext.db`. Relative `DATABASE_PATH` values are resolved from `backend/`, so use `data/upnext.db`; absolute paths remain supported. Database initialization is additive and does not require deleting the existing database. The repository-root `data/upnext.db` is a legacy artifact and is not read by the application; it is preserved rather than merged or removed automatically.
 
 ### GitHub ownership verification (local)
 
@@ -61,6 +61,6 @@ python -m unittest discover -s tests -v
 - Reports: `POST /api/reports`
 - Health: `GET /api/health`
 
-GitHub and Spotify user-account ownership verification are implemented through OAuth. Spotify artist ownership, other platforms, follower-count eligibility, and all other eligibility checks remain unimplemented. UpNext does not store external platform passwords, scrape platforms, or include likes, follows, feeds, messaging, or monetization in V0.
+GitHub and Spotify user-account ownership verification are implemented through OAuth. YouTube may be linked as an ordinary social account but is not verified in V1. Spotify artist ownership, follower-count eligibility, and all other eligibility checks remain unimplemented. UpNext does not store external platform passwords, scrape platforms, or include likes, follows, feeds, messaging, or monetization in V0.
 
 Privacy, terms, community guidelines, reporting, and account deletion documents remain launch placeholders and require proper review before public release.

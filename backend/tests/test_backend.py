@@ -1,9 +1,12 @@
+import os
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from app import create_app
+from config import BASE_DIR, resolve_database_path
+from services.discovery_service import calculate_profile_strength, sort_profiles
 
 
 class TestConfig:
@@ -249,6 +252,77 @@ class BackendTestCase(unittest.TestCase):
         self.assertFalse(updated.json["social_account"]["ownership_verified"])
         self.assertEqual(updated.json["social_account"]["verification_status"], "unverified")
         self.assertIsNone(updated.json["social_account"]["verified_at"])
+
+    def test_database_paths_are_backend_relative_and_cwd_independent(self):
+        original_cwd = Path.cwd()
+        try:
+            os.chdir(tempfile.gettempdir())
+            self.assertEqual(resolve_database_path("data/upnext.db"), BASE_DIR / "data" / "upnext.db")
+            self.assertEqual(resolve_database_path("backend/data/upnext.db"), BASE_DIR / "data" / "upnext.db")
+        finally:
+            os.chdir(original_cwd)
+        self.assertEqual(resolve_database_path(Path(tempfile.gettempdir()) / "upnext.sqlite"), Path(tempfile.gettempdir()) / "upnext.sqlite")
+
+    def test_youtube_remains_linked_but_is_not_an_active_verification_provider(self):
+        self.signup()
+        self.create_profile()
+        social = self.client.post("/api/creator/socials", json={"platform": "YouTube", "username": "maker", "profile_url": "https://youtube.com/@maker"})
+        self.assertEqual(social.status_code, 201)
+        self.assertEqual(self.client.get(f"/api/creator/socials/{social.json['social_account']['id']}/verify/youtube").status_code, 404)
+
+        connection = __import__("sqlite3").connect(self.db_path)
+        connection.execute("UPDATE social_accounts SET ownership_verified = 1, verification_status = 'verified' WHERE id = ?", (social.json["social_account"]["id"],))
+        connection.commit()
+        connection.close()
+        creator = self.client.get("/api/creator/me").json["creator"]
+        self.assertEqual(creator["verified_social_count"], 0)
+
+    def test_verified_social_count_strength_and_invalidation_are_derived(self):
+        self.signup()
+        self.create_profile()
+        social = self.github_social()
+        self.client.post("/api/creator/projects", json={"title": "Tool", "url": "https://example.com/tool"})
+        initial = self.client.get("/api/creators/maker").json["creator"]
+        self.assertEqual(initial["verified_social_count"], 0)
+        initial_strength = initial["profile_strength"]
+
+        connection = __import__("sqlite3").connect(self.db_path)
+        connection.execute("UPDATE social_accounts SET ownership_verified = 1, verification_status = 'verified', provider_account_id = ? WHERE id = ?", ("private-provider-id", social["id"]))
+        connection.commit()
+        connection.close()
+        verified = self.client.get("/api/creators/maker").json["creator"]
+        self.assertEqual(verified["verified_social_count"], 1)
+        self.assertEqual(verified["profile_strength"], initial_strength + 5)
+        self.assertNotIn("private-provider-id", self.client.get("/api/creators/maker").text)
+
+        invalidated = self.client.patch(f"/api/creator/socials/{social['id']}", json={"username": "other", "profile_url": "https://github.com/other"})
+        self.assertEqual(invalidated.status_code, 200)
+        refreshed = self.client.get("/api/creators/maker").json["creator"]
+        self.assertEqual(refreshed["verified_social_count"], 0)
+        self.assertEqual(refreshed["profile_strength"], initial_strength)
+
+    def test_discovery_profile_strength_is_secondary_to_complete_relevant_profiles(self):
+        weak_verified = {
+            "username": "weak-verified", "bio": "A short bio", "categories": ["Developer"], "skills": ["Python"],
+            "projects": [{"title": "Small tool"}], "social_accounts": [{"platform": "GitHub"}],
+            "publishability": {"publishable": True}, "verified_social_count": 2,
+        }
+        strong_unverified = {
+            "username": "strong-unverified", "bio": "A detailed developer profile", "categories": ["Developer"], "skills": ["Python", "TypeScript", "Design"],
+            "projects": [{"title": "One"}, {"title": "Two"}, {"title": "Three"}], "social_accounts": [{"platform": "GitHub"}, {"platform": "Website"}, {"platform": "LinkedIn"}],
+            "publishability": {"publishable": True}, "verified_social_count": 0,
+        }
+        self.assertGreater(calculate_profile_strength(strong_unverified), calculate_profile_strength(weak_verified))
+        self.assertEqual(sort_profiles([weak_verified, strong_unverified])[0]["username"], "strong-unverified")
+
+        self.signup()
+        self.create_profile()
+        self.client.post("/api/creator/projects", json={"title": "Tool", "url": "https://example.com/tool"})
+        self.github_social()
+        public = self.client.get("/api/creators")
+        self.assertEqual(public.status_code, 200)
+        self.assertEqual(public.json["total"], 1)
+        self.assertTrue(public.json["creators"][0]["publishability"]["publishable"])
 
 
 if __name__ == "__main__":

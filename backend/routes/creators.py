@@ -5,7 +5,7 @@ from flask import Blueprint, g, jsonify, request
 
 from database import get_db
 from helpers.auth import require_login
-from services.discovery_service import sort_profiles
+from services.discovery_service import calculate_profile_strength, sort_profiles
 
 creators_bp = Blueprint("creators", __name__)
 
@@ -13,6 +13,7 @@ CATEGORIES = {
     "Artist", "Musician", "Developer", "Game Developer", "Video Creator",
     "Writer", "Photographer", "Designer", "3D Artist", "Other",
 }
+VERIFIABLE_PLATFORMS = {"GitHub", "Spotify"}
 
 
 def clean_list(value):
@@ -70,6 +71,10 @@ def serialize_creator(connection, creator, include_owner=False):
         if row["eligibility_verified"] and row["follower_count"] is not None:
             item["follower_count"] = row["follower_count"]
         socials.append(item)
+    verified_social_count = sum(
+        1 for social in socials
+        if social["platform"] in VERIFIABLE_PLATFORMS and social["ownership_verified"] and social["verification_status"] == "verified"
+    )
     result = {
         "id": creator_id, "display_name": creator["display_name"], "username": creator["username"],
         "bio": creator["bio"] or "", "avatar": creator["avatar"] or "", "location": creator["location"],
@@ -80,7 +85,9 @@ def serialize_creator(connection, creator, include_owner=False):
         "projects": [dict(row) for row in connection.execute("SELECT id, title, description, type, url, created_at, updated_at FROM projects WHERE creator_id = ? ORDER BY created_at DESC", (creator_id,)).fetchall()],
         "created_at": creator["created_at"], "updated_at": creator["updated_at"],
         "publishability": publishability(connection, creator),
+        "verified_social_count": verified_social_count,
     }
+    result["profile_strength"] = calculate_profile_strength(result)
     if include_owner:
         result["user_id"] = creator["user_id"]
     return result
