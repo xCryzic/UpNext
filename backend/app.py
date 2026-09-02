@@ -1,9 +1,13 @@
-from flask import Flask, jsonify
+from pathlib import Path
+
+from flask import Flask, jsonify, send_from_directory
 from flask_cors import CORS
 
 from config import Config
 from database import get_db, init_db
 from routes.auth import auth_bp
+from routes.account import account_bp
+from routes.admin import admin_bp
 from routes.creators import creators_bp
 from routes.projects import projects_bp
 from routes.reports import reports_bp
@@ -11,13 +15,17 @@ from routes.socials import socials_bp
 
 
 def create_app(config_class=Config):
-    app = Flask(__name__)
+    frontend_dist = Path(__file__).resolve().parent.parent / "dist"
+    app = Flask(__name__, static_folder=str(frontend_dist / "assets"), static_url_path="/assets")
     app.config.from_object(config_class)
     CORS(app, origins=[app.config["FRONTEND_ORIGIN"]], supports_credentials=True)
     with app.app_context():
         init_db()
+    app.logger.info("Database path: %s", app.config["DATABASE_PATH"])
 
     app.register_blueprint(auth_bp)
+    app.register_blueprint(account_bp)
+    app.register_blueprint(admin_bp)
     app.register_blueprint(creators_bp)
     app.register_blueprint(socials_bp)
     app.register_blueprint(projects_bp)
@@ -42,9 +50,41 @@ def create_app(config_class=Config):
     def not_found(_error):
         return jsonify({"error": "Not found."}), 404
 
+    @app.errorhandler(400)
+    def bad_request(_error):
+        return jsonify({"error": "Bad request."}), 400
+
+    @app.errorhandler(401)
+    def unauthorized(_error):
+        return jsonify({"error": "Authentication required."}), 401
+
+    @app.errorhandler(403)
+    def forbidden(_error):
+        return jsonify({"error": "Forbidden."}), 403
+
+    @app.errorhandler(409)
+    def conflict(_error):
+        return jsonify({"error": "Conflict."}), 409
+
+    @app.errorhandler(429)
+    def rate_limited(_error):
+        return jsonify({"error": "Too many requests. Please try again shortly."}), 429
+
     @app.errorhandler(500)
     def server_error(_error):
         return jsonify({"error": "Internal server error."}), 500
+
+    @app.route("/", defaults={"path": ""})
+    @app.route("/<path:path>")
+    def frontend(path):
+        if path == "api" or path.startswith("api/"):
+            return jsonify({"error": "Not found."}), 404
+        requested = frontend_dist / path
+        if path and requested.is_file():
+            return send_from_directory(frontend_dist, path)
+        if (frontend_dist / "index.html").is_file():
+            return send_from_directory(frontend_dist, "index.html")
+        return jsonify({"error": "Frontend build not found."}), 404
 
     return app
 

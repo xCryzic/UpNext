@@ -1,5 +1,7 @@
 const configuredUrl = import.meta.env.VITE_API_URL as string | undefined;
-export const API_URL = (configuredUrl || "http://localhost:5000").replace(/\/$/, "");
+// Development uses Flask directly. Production is served by Flask, so API calls
+// intentionally stay same-origin unless an explicit URL is configured.
+export const API_URL = (configuredUrl || (import.meta.env.DEV ? "http://localhost:5000" : "")).replace(/\/$/, "");
 export class ApiError extends Error { constructor(message: string, public status: number) { super(message); } }
 export async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   const headers = new Headers(options.headers);

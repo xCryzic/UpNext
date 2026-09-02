@@ -1,6 +1,7 @@
 export interface AuthUser {
   id: string;
   email: string;
+  is_admin?: boolean;
 }
 
 export interface AuthProvider {

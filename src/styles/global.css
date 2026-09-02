@@ -823,6 +823,18 @@ footer small {
 .verification-summary > div > div { display: flex; justify-content: space-between; gap: 12px; color: #49564d; font-size: .75rem; }
 .social-list .ownership-verified { margin-left: 5px; }
 .public-verification-summary { margin: 18px 0 0; }
+.settings-wrap, .legal-wrap { width: min(760px, calc(100% - 40px)); margin: 56px auto 100px; }
+.settings-wrap > h1, .legal-wrap > h1 { margin-top: 5px; font-size: clamp(2rem, 5vw, 3.4rem); }
+.settings-section { margin-top: 24px; padding: 24px; border: 1px solid #d9ded6; border-radius: 14px; background: #fff; }
+.settings-section h2 { margin: 0 0 8px; font-size: 1.15rem; }
+.settings-section p, .legal-wrap > p { color: #647067; line-height: 1.65; }
+.settings-note { margin-bottom: 0; font-size: .82rem; }
+.danger-zone { border-color: #ead7d2; }
+.confirm-delete { display: flex; align-items: center; gap: 9px; margin: 18px 0; color: #4e5b52; font-size: .86rem; }
+.footer-links { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; }
+.footer-links a { color: #6d796f; font-size: .78rem; text-decoration: none; }
+.footer-links a:hover { color: #315f50; text-decoration: underline; }
+.moderation-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
 
 /* =========================================================
    AUTH SUBMIT

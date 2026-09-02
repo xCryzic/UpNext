@@ -1,16 +1,22 @@
-from flask import Blueprint, jsonify, request, session
+from flask import Blueprint, current_app, jsonify, request, session
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from database import get_db
+from services.rate_limit import rate_limit
 
 auth_bp = Blueprint("auth", __name__)
 
 
 def user_response(row):
-    return {"id": str(row["id"]), "email": row["email"]}
+    return {
+        "id": str(row["id"]),
+        "email": row["email"],
+        "is_admin": row["email"].lower() in current_app.config.get("ADMIN_EMAILS", set()),
+    }
 
 
 @auth_bp.post("/api/auth/signup")
+@rate_limit("RATE_LIMIT_SIGNUP_PER_MINUTE", 5)
 def signup():
     data = request.get_json(silent=True) or {}
     email = str(data.get("email", "")).strip().lower()
@@ -31,6 +37,7 @@ def signup():
 
 
 @auth_bp.post("/api/auth/login")
+@rate_limit("RATE_LIMIT_LOGIN_PER_MINUTE", 10)
 def login():
     data = request.get_json(silent=True) or {}
     email = str(data.get("email", "")).strip().lower()

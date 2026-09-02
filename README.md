@@ -63,4 +63,48 @@ python -m unittest discover -s tests -v
 
 GitHub and Spotify user-account ownership verification are implemented through OAuth. YouTube may be linked as an ordinary social account but is not verified in V1. Spotify artist ownership, follower-count eligibility, and all other eligibility checks remain unimplemented. UpNext does not store external platform passwords, scrape platforms, or include likes, follows, feeds, messaging, or monetization in V0.
 
-Privacy, terms, community guidelines, reporting, and account deletion documents remain launch placeholders and require proper review before public release.
+## Production / Railway
+
+UpNext can run as one service: build the Vite frontend, then let Flask serve `dist/` and the API. Do not use Flask's development server in production.
+
+```text
+# Build command (repository root)
+npm ci && npm run build
+
+# Start command (Railway)
+gunicorn --chdir backend --workers 1 --bind 0.0.0.0:$PORT app:app
+```
+
+Set `APP_ENV=production` and configure a Railway persistent volume mounted at `/data`. The database setting must be an absolute persistent-volume path: `DATABASE_PATH=/data/upnext.db`. Startup logs the resolved database path without logging credentials. Relative database paths are rejected in production so a deploy cannot silently create an ephemeral SQLite database. Keep this SQLite V1 to one Gunicorn worker unless you deliberately plan and test a different concurrency strategy.
+
+Required production variables are:
+
+```text
+APP_ENV=production
+SECRET_KEY=<long random value>
+DATABASE_PATH=/data/upnext.db
+FRONTEND_URL=https://<your-domain>
+ADMIN_EMAILS=owner@example.com
+GITHUB_CLIENT_ID=
+GITHUB_CLIENT_SECRET=
+GITHUB_OAUTH_CALLBACK_URL=https://<your-domain>/api/creator/socials/github/callback
+SPOTIFY_CLIENT_ID=
+SPOTIFY_CLIENT_SECRET=
+SPOTIFY_OAUTH_CALLBACK_URL=https://<your-domain>/api/creator/socials/spotify/callback
+```
+
+Set the GitHub and Spotify OAuth App callback URLs to the matching production URLs above. In production, session cookies are `HttpOnly`, `Secure`, and `SameSite=Lax`; the frontend origin is the only CORS origin allowed when CORS is needed. The app uses modest in-memory, per-process rate limits for login, signup, reports, and OAuth starts. This is suitable for a small V1 but is not shared across multiple server processes.
+
+Create a consistent SQLite backup using SQLite's backup API (not a raw file copy while the app is running):
+
+```text
+python backend/scripts/backup_sqlite.py /data/upnext.db /data/backups
+```
+
+## Public pages and moderation
+
+The app includes concise `/privacy`, `/terms`, and `/community-guidelines` pages. They describe the data the product actually uses, including account data, profiles, projects, linked socials, account-ownership verification state, reports, and necessary session/security data. They are product notices, not legal advice; have counsel review them before launch.
+
+Authenticated creators can unpublish a profile without deleting their account. Public discovery and public profile endpoints require both a publishable profile and public visibility. Account deletion permanently removes the user's account and its related creator data in a database transaction, then clears the session.
+
+Set `ADMIN_EMAILS` to a comma-separated set of owner email addresses to access the minimal moderation API. Admins can list reports, set `open`, `dismissed`, or `actioned`, and hide or restore a publishable profile. Ownership verification never prevents reporting or moderation action.

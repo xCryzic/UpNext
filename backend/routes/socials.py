@@ -13,6 +13,7 @@ from flask import Blueprint, current_app, g, jsonify, redirect, request, session
 
 from database import get_db
 from helpers.auth import require_login
+from services.rate_limit import rate_limit
 
 socials_bp = Blueprint("socials", __name__)
 PLATFORMS = {"Instagram", "TikTok", "YouTube", "GitHub", "Spotify", "X", "Twitch", "Behance", "Dribbble", "LinkedIn", "Website/Portfolio"}
@@ -229,6 +230,7 @@ def delete_social(social_id):
 
 @socials_bp.get("/api/creator/socials/<int:social_id>/verify/github")
 @require_login
+@rate_limit("RATE_LIMIT_OAUTH_PER_MINUTE", 10)
 def start_github_verification(social_id):
     if not current_app.config.get("GITHUB_CLIENT_ID") or not current_app.config.get("GITHUB_CLIENT_SECRET") or not current_app.config.get("GITHUB_OAUTH_CALLBACK_URL"):
         return jsonify({"error": "GitHub verification is not configured."}), 503
@@ -287,6 +289,7 @@ def github_verification_callback():
 
 @socials_bp.get("/api/creator/socials/<int:social_id>/verify/spotify")
 @require_login
+@rate_limit("RATE_LIMIT_OAUTH_PER_MINUTE", 10)
 def start_spotify_verification(social_id):
     if not current_app.config.get("SPOTIFY_CLIENT_ID") or not current_app.config.get("SPOTIFY_CLIENT_SECRET") or not current_app.config.get("SPOTIFY_OAUTH_CALLBACK_URL"):
         return jsonify({"error": "Spotify verification is not configured."}), 503

@@ -57,6 +57,7 @@ def init_db(config=None):
                 avatar TEXT DEFAULT '',
                 location TEXT,
                 website TEXT,
+                is_public INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
@@ -155,6 +156,8 @@ def init_db(config=None):
             connection.execute("ALTER TABLE creators ADD COLUMN created_at TEXT NOT NULL DEFAULT ''")
         if "updated_at" not in existing_columns:
             connection.execute("ALTER TABLE creators ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''")
+        if "is_public" not in existing_columns:
+            connection.execute("ALTER TABLE creators ADD COLUMN is_public INTEGER NOT NULL DEFAULT 1")
 
         social_columns = {
             row["name"]
@@ -182,6 +185,13 @@ def init_db(config=None):
         for column in ("created_at", "updated_at"):
             if column not in project_columns:
                 connection.execute(f"ALTER TABLE projects ADD COLUMN {column} TEXT NOT NULL DEFAULT ''")
+
+        report_columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(reports)").fetchall()
+        }
+        if "status" not in report_columns:
+            connection.execute("ALTER TABLE reports ADD COLUMN status TEXT NOT NULL DEFAULT 'open'")
 
         connection.execute("CREATE INDEX IF NOT EXISTS idx_creators_username ON creators(username)")
         connection.execute("CREATE INDEX IF NOT EXISTS idx_creators_updated_at ON creators(updated_at)")

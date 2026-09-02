@@ -2,6 +2,7 @@ from flask import Blueprint, g, jsonify, request
 
 from database import get_db
 from helpers.auth import require_login
+from services.rate_limit import rate_limit
 
 reports_bp = Blueprint("reports", __name__)
 REASONS = {"misleading_work", "plagiarism", "spam", "fake_credentials", "ai_misrepresentation", "inappropriate_content", "other"}
@@ -9,6 +10,7 @@ REASONS = {"misleading_work", "plagiarism", "spam", "fake_credentials", "ai_misr
 
 @reports_bp.post("/api/reports")
 @require_login
+@rate_limit("RATE_LIMIT_REPORTS_PER_MINUTE", 5)
 def create_report():
     data = request.get_json(silent=True) or {}
     reason = str(data.get("reason", "")).strip()

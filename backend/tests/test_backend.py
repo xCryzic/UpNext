@@ -5,11 +5,13 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app import create_app
-from config import BASE_DIR, resolve_database_path
+from config import BASE_DIR, resolve_database_path, validate_configuration
 from services.discovery_service import calculate_profile_strength, sort_profiles
+from services.rate_limit import reset_rate_limits
 
 
 class TestConfig:
+    APP_ENV = "development"
     SECRET_KEY = "test-secret"
     DATABASE_PATH = Path(tempfile.gettempdir()) / "upnext-test.sqlite"
     FRONTEND_ORIGIN = "http://localhost:5173"
@@ -17,6 +19,12 @@ class TestConfig:
     SESSION_COOKIE_SAMESITE = "Lax"
     SESSION_COOKIE_SECURE = False
     EXPOSE_DB_INFO = False
+    ADMIN_EMAILS = frozenset({"admin@example.com"})
+    RATE_LIMIT_ENABLED = False
+    RATE_LIMIT_LOGIN_PER_MINUTE = 10
+    RATE_LIMIT_SIGNUP_PER_MINUTE = 5
+    RATE_LIMIT_REPORTS_PER_MINUTE = 5
+    RATE_LIMIT_OAUTH_PER_MINUTE = 10
     GITHUB_CLIENT_ID = "test-client-id"
     GITHUB_CLIENT_SECRET = "test-client-secret"
     GITHUB_OAUTH_CALLBACK_URL = "http://localhost:5000/api/creator/socials/github/callback"
@@ -33,6 +41,7 @@ class BackendTestCase(unittest.TestCase):
             cls.db_path.unlink()
 
     def setUp(self):
+        reset_rate_limits()
         if self.db_path.exists():
             self.db_path.unlink()
         self.app = create_app(TestConfig)
@@ -262,6 +271,74 @@ class BackendTestCase(unittest.TestCase):
         finally:
             os.chdir(original_cwd)
         self.assertEqual(resolve_database_path(Path(tempfile.gettempdir()) / "upnext.sqlite"), Path(tempfile.gettempdir()) / "upnext.sqlite")
+
+    def test_production_configuration_requires_secret_and_absolute_database_path(self):
+        with self.assertRaises(RuntimeError):
+            validate_configuration("production", "", "/data/upnext.db")
+        with self.assertRaises(RuntimeError):
+            validate_configuration("production", "test-secret", "data/upnext.db")
+        validate_configuration("production", "test-secret", "/data/upnext.db")
+
+    def test_signup_rate_limit_returns_json_429(self):
+        self.app.config.update(RATE_LIMIT_ENABLED=True, RATE_LIMIT_SIGNUP_PER_MINUTE=1)
+        self.assertEqual(self.signup("first@example.com").status_code, 201)
+        response = self.signup("second@example.com")
+        self.assertEqual(response.status_code, 429)
+        self.assertEqual(response.json["error"], "Too many requests. Please try again shortly.")
+
+    def test_public_api_not_found_returns_json(self):
+        response = self.client.get("/api/does-not-exist")
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json["error"], "Not found.")
+
+    def test_unpublish_removes_creator_from_public_discovery_and_republish_restores_it(self):
+        self.signup()
+        self.create_profile()
+        self.github_social()
+        self.client.post("/api/creator/projects", json={"title": "Tool", "url": "https://example.com/tool"})
+        self.assertEqual(self.client.get("/api/creators").json["total"], 1)
+        hidden = self.client.patch("/api/creator/visibility", json={"is_public": False})
+        self.assertEqual(hidden.status_code, 200)
+        self.assertFalse(hidden.json["creator"]["is_public"])
+        self.assertEqual(self.client.get("/api/creators").json["total"], 0)
+        self.assertEqual(self.client.get("/api/creators/maker").status_code, 404)
+        shown = self.client.patch("/api/creator/visibility", json={"is_public": True})
+        self.assertEqual(shown.status_code, 200)
+        self.assertTrue(shown.json["creator"]["is_public"])
+        self.assertEqual(self.client.get("/api/creators").json["total"], 1)
+
+    def test_account_deletion_is_owned_and_cleans_related_creator_data(self):
+        self.signup()
+        self.create_profile()
+        self.github_social()
+        self.client.post("/api/creator/projects", json={"title": "Tool", "url": "https://example.com/tool"})
+        creator_id = self.client.get("/api/creator/me").json["creator"]["id"]
+        self.assertEqual(self.client.post("/api/reports", json={"creator_id": creator_id, "reason": "spam"}).status_code, 201)
+        deleted = self.client.delete("/api/account")
+        self.assertEqual(deleted.status_code, 200)
+        self.assertIsNone(self.client.get("/api/auth/me").json["user"])
+        connection = __import__("sqlite3").connect(self.db_path)
+        for table in ("users", "creators", "social_accounts", "projects", "creator_categories", "creator_skills", "creator_looking_for", "reports"):
+            self.assertEqual(connection.execute(f"SELECT count(*) FROM {table}").fetchone()[0], 0, table)
+        connection.close()
+
+    def test_admin_moderation_requires_admin_and_can_hide_creator(self):
+        self.signup("creator@example.com")
+        self.create_profile()
+        self.github_social()
+        self.client.post("/api/creator/projects", json={"title": "Tool", "url": "https://example.com/tool"})
+        creator_id = self.client.get("/api/creator/me").json["creator"]["id"]
+        self.assertEqual(self.client.get("/api/admin/reports").status_code, 403)
+        self.client.post("/api/auth/logout")
+        self.signup("admin@example.com")
+        report = self.client.post("/api/reports", json={"creator_id": creator_id, "reason": "spam"})
+        report_id = report.json["report"]["id"]
+        reports = self.client.get("/api/admin/reports")
+        self.assertEqual(reports.status_code, 200)
+        self.assertEqual(reports.json["reports"][0]["id"], report_id)
+        self.assertEqual(self.client.patch(f"/api/admin/reports/{report_id}", json={"status": "actioned"}).json["report"]["status"], "actioned")
+        self.assertEqual(self.client.patch(f"/api/admin/creators/{creator_id}/visibility", json={"is_public": False}).status_code, 200)
+        self.assertEqual(self.client.get("/api/creators").json["total"], 0)
 
     def test_youtube_remains_linked_but_is_not_an_active_verification_provider(self):
         self.signup()

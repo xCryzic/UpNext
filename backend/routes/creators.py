@@ -85,6 +85,7 @@ def serialize_creator(connection, creator, include_owner=False):
         "projects": [dict(row) for row in connection.execute("SELECT id, title, description, type, url, created_at, updated_at FROM projects WHERE creator_id = ? ORDER BY created_at DESC", (creator_id,)).fetchall()],
         "created_at": creator["created_at"], "updated_at": creator["updated_at"],
         "publishability": publishability(connection, creator),
+        "is_public": bool(creator["is_public"]),
         "verified_social_count": verified_social_count,
     }
     result["profile_strength"] = calculate_profile_strength(result)
@@ -204,6 +205,27 @@ def delete_creator():
         connection.close()
 
 
+@creators_bp.patch("/api/creator/visibility")
+@require_login
+def update_creator_visibility():
+    data = request.get_json(silent=True) or {}
+    if not isinstance(data.get("is_public"), bool):
+        return jsonify({"error": "is_public must be true or false."}), 400
+    connection = get_db()
+    try:
+        creator = connection.execute("SELECT * FROM creators WHERE user_id = ?", (g.user_id,)).fetchone()
+        if not creator:
+            return jsonify({"error": "Creator profile not found."}), 404
+        if data["is_public"] and not publishability(connection, creator)["publishable"]:
+            return jsonify({"error": "Complete the required profile sections before publishing."}), 400
+        connection.execute("UPDATE creators SET is_public = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (int(data["is_public"]), creator["id"]))
+        connection.commit()
+        creator = connection.execute("SELECT * FROM creators WHERE id = ?", (creator["id"],)).fetchone()
+        return jsonify({"creator": serialize_creator(connection, creator, True)})
+    finally:
+        connection.close()
+
+
 @creators_bp.get("/api/creators")
 def list_creators():
     search = request.args.get("search", "").strip()
@@ -218,7 +240,7 @@ def list_creators():
     try:
         rows = connection.execute("SELECT * FROM creators ORDER BY updated_at DESC").fetchall()
         profiles = [serialize_creator(connection, row) for row in rows]
-        profiles = [profile for profile in profiles if profile["publishability"]["publishable"]]
+        profiles = [profile for profile in profiles if profile["publishability"]["publishable"] and profile.get("is_public", True)]
         if category:
             profiles = [profile for profile in profiles if category in profile["categories"]]
         if search:
@@ -238,7 +260,7 @@ def public_creator(username):
         if not creator:
             return jsonify({"error": "Creator not found."}), 404
         result = serialize_creator(connection, creator)
-        if not result["publishability"]["publishable"]:
+        if not result["publishability"]["publishable"] or not creator["is_public"]:
             return jsonify({"error": "Creator not found."}), 404
         return jsonify({"creator": result})
     finally:
