@@ -4,7 +4,7 @@ from flask import Flask, jsonify, send_from_directory
 from flask_cors import CORS
 
 from config import Config
-from database import get_db, init_db
+from database import configure_sqlalchemy, get_db, init_db, remove_sqlalchemy_session
 from routes.auth import auth_bp
 from routes.account import account_bp
 from routes.admin import admin_bp
@@ -18,10 +18,15 @@ def create_app(config_class=Config):
     frontend_dist = Path(__file__).resolve().parent.parent / "dist"
     app = Flask(__name__, static_folder=str(frontend_dist / "assets"), static_url_path="/assets")
     app.config.from_object(config_class)
+    configure_sqlalchemy(app.config)
     CORS(app, origins=[app.config["FRONTEND_ORIGIN"]], supports_credentials=True)
     with app.app_context():
         init_db()
     app.logger.info("Database path: %s", app.config["DATABASE_PATH"])
+
+    @app.teardown_appcontext
+    def cleanup_sqlalchemy(_error=None):
+        remove_sqlalchemy_session()
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(account_bp)
