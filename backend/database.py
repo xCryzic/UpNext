@@ -1,7 +1,44 @@
 import sqlite3
+from sqlalchemy import create_engine
+from sqlalchemy.pool import NullPool
+from sqlalchemy.orm import scoped_session, sessionmaker
 from flask import current_app
 
 from config import Config
+
+_sa_engine = None
+_sa_session_factory = None
+
+
+def sqlalchemy_database_url(config=None):
+    """PostgreSQL in production; explicit SQLAlchemy SQLite fallback locally."""
+    settings = config or current_app.config
+    configured = settings.get("DATABASE_URL")
+    if configured:
+        return configured
+    if settings.get("APP_ENV") == "production":
+        raise RuntimeError("DATABASE_URL must be set when APP_ENV=production.")
+    return f"sqlite:///{settings.get('DATABASE_PATH', Config.DATABASE_PATH)}"
+
+
+def configure_sqlalchemy(config=None):
+    global _sa_engine, _sa_session_factory
+    url = sqlalchemy_database_url(config)
+    options = {"check_same_thread": False} if url.startswith("sqlite") else {}
+    _sa_engine = create_engine(url, future=True, pool_pre_ping=True, connect_args=options, **({"poolclass": NullPool} if url.startswith("sqlite") else {}))
+    _sa_session_factory = scoped_session(sessionmaker(bind=_sa_engine, autoflush=False, expire_on_commit=False, future=True))
+    return _sa_engine
+
+
+def sqlalchemy_session():
+    if _sa_session_factory is None:
+        configure_sqlalchemy()
+    return _sa_session_factory()
+
+
+def remove_sqlalchemy_session():
+    if _sa_session_factory is not None:
+        _sa_session_factory.remove()
 
 
 def ensure_database_directory():
