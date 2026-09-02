@@ -19,10 +19,11 @@ Backend, from `backend/`:
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
+python -m alembic upgrade head
 python app.py
 ```
 
-The backend runs at `http://localhost:5000`, and Vite runs at `http://localhost:5173`. Use `localhost` for both during HTTP development. Backend configuration is read from `backend/.env`. Development may use the SQLAlchemy SQLite fallback at `backend/data/upnext-dev.db`; production requires `DATABASE_URL` for an external PostgreSQL database.
+The backend runs at `http://localhost:5000`, and Vite runs at `http://localhost:5173`. Use `localhost` for both during HTTP development. Backend configuration is read from `backend/.env`. Development may use the SQLAlchemy SQLite fallback at `backend/data/upnext-dev.db`; production requires `DATABASE_URL` for an external PostgreSQL database. Alembic owns schema creation in every environment; Flask startup never applies migrations.
 
 ### GitHub ownership verification (local)
 
@@ -74,13 +75,26 @@ cd backend
 alembic upgrade head
 ```
 
-UpNext can be hosted as a conventional web service: build the Vite frontend, then let Flask serve `dist/` and the same-origin API. Do not use Flask's development server in production.
+### Vercel + Neon
+
+On Vercel, Vite builds the static `dist/` output and Vercel's CDN serves it. The catch-all Python Function at `api/[...path].py` imports the existing Flask application and handles `/api/*`; it does not serve frontend files and does not run Gunicorn. The SPA rewrite is evaluated after filesystem routes, so direct visits to client-side routes return `index.html` while `/api/*` continues to reach Flask.
+
+Set the Vercel environment variables below for the Production environment, then run Alembic manually against Neon whenever schema changes are introduced. Do not run migrations from a Vercel Function invocation:
 
 ```text
-# Build command (repository root)
+cd backend
+python -m alembic upgrade head
+```
+
+The Vercel build command is `npm run build`. Vercel installs Python dependencies from the root `requirements.txt`, which delegates to `backend/requirements.txt`.
+
+The application can also be hosted as a conventional web service: build the Vite frontend, then let Flask serve `dist/` and the same-origin API. Do not use Flask's development server in production.
+
+```text
+# Traditional-host build command (repository root)
 pip install -r backend/requirements.txt && npm ci && npm run build
 
-# Start command (repository root)
+# Traditional-host start command (repository root)
 gunicorn --chdir backend --workers 1 --bind 0.0.0.0:$PORT app:app
 ```
 
@@ -101,6 +115,8 @@ SPOTIFY_OAUTH_CALLBACK_URL=https://<your-domain>/api/creator/socials/spotify/cal
 ```
 
 Set the GitHub and Spotify OAuth App callback URLs to the matching production URLs above. In production, session cookies are `HttpOnly`, `Secure`, and `SameSite=Lax`; the frontend origin is the only CORS origin allowed when CORS is needed. The app uses modest in-memory, per-process rate limits for login, signup, reports, and OAuth starts. This is suitable for a small V1 but is not shared across multiple server processes.
+
+On Vercel, the in-memory rate limiter is per Function instance and cannot enforce a global limit across concurrent or cold-started instances. It remains a best-effort local guard only; use a shared limiter before relying on it as a global abuse-control boundary.
 
 Use your managed PostgreSQL provider's backup and recovery tooling for production backups. The local SQLAlchemy SQLite fallback is only for development and automated tests; it is not a production persistence option.
 

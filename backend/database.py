@@ -13,7 +13,9 @@ def database_url(config=None):
  return f"sqlite:///{BASE_DIR / 'data' / 'upnext-dev.db'}"
 def configure_sqlalchemy(config=None):
  global _engine,_sessions
- url=database_url(config);sqlite=url.startswith("sqlite");_engine=create_engine(url,future=True,pool_pre_ping=True,connect_args={"check_same_thread":False} if sqlite else {},**({"poolclass":NullPool} if sqlite else {}))
+ settings=config or Config
+ serverless=settings.get("SQLALCHEMY_SERVERLESS",False) if hasattr(settings,"get") else getattr(settings,"SQLALCHEMY_SERVERLESS",False)
+ url=database_url(settings);sqlite=url.startswith("sqlite");_engine=create_engine(url,future=True,pool_pre_ping=True,connect_args={"check_same_thread":False} if sqlite else {},**({"poolclass":NullPool} if sqlite or serverless else {}))
  if sqlite:
   @event.listens_for(_engine,"connect")
   def foreign_keys(connection,_record):connection.execute("PRAGMA foreign_keys=ON")

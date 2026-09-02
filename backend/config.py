@@ -32,6 +32,10 @@ class Config:
     SECRET_KEY = os.getenv("SECRET_KEY") or ("dev-only-change-this" if APP_ENV == "development" else "")
 
     DATABASE_URL = normalize_database_url(os.getenv("DATABASE_URL"))
+    # Vercel Functions do not share a stable process-wide connection pool.
+    SQLALCHEMY_SERVERLESS = os.getenv("VERCEL", "") == "1"
+    # Flask startup never changes schema; isolated tests opt in explicitly.
+    AUTO_CREATE_SCHEMA = False
 
     FRONTEND_ORIGIN = os.getenv("FRONTEND_URL", os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")).rstrip("/")
 

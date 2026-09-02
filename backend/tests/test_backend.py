@@ -14,6 +14,8 @@ from services.rate_limit import reset_rate_limits
 
 class TestConfig:
     APP_ENV = "development"
+    AUTO_CREATE_SCHEMA = True
+    SQLALCHEMY_SERVERLESS = False
     SECRET_KEY = "test-secret"
     TEST_DATABASE_FILE = Path(tempfile.gettempdir()) / "upnext-test.sqlite"
     DATABASE_URL = f"sqlite:///{TEST_DATABASE_FILE}"

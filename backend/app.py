@@ -1,4 +1,5 @@
 from pathlib import Path
+import os
 
 from flask import Flask, jsonify, send_from_directory
 from flask_cors import CORS
@@ -17,12 +18,17 @@ from routes.socials import socials_bp
 
 def create_app(config_class=Config):
     frontend_dist = Path(__file__).resolve().parent.parent / "dist"
-    app = Flask(__name__, static_folder=str(frontend_dist / "assets"), static_url_path="/assets")
+    is_vercel = os.getenv("VERCEL", "") == "1"
+    app = Flask(
+        __name__,
+        static_folder=None if is_vercel else str(frontend_dist / "assets"),
+        static_url_path=None if is_vercel else "/assets",
+    )
     app.config.from_object(config_class)
     configure_sqlalchemy(app.config)
     CORS(app, origins=[app.config["FRONTEND_ORIGIN"]], supports_credentials=True)
-    # Production schemas are created by Alembic, never implicitly at startup.
-    if app.config["APP_ENV"] != "production":
+    # Alembic owns schemas. Only isolated tests create disposable tables.
+    if app.config.get("AUTO_CREATE_SCHEMA", False):
         with app.app_context():
             init_db(app.config)
     app.logger.info("Database configured using %s.", (app.config.get("DATABASE_URL") or "development SQLite fallback").split(":", 1)[0])
@@ -78,17 +84,20 @@ def create_app(config_class=Config):
     def server_error(_error):
         return jsonify({"error": "Internal server error."}), 500
 
-    @app.route("/", defaults={"path": ""})
-    @app.route("/<path:path>")
-    def frontend(path):
-        if path == "api" or path.startswith("api/"):
-            return jsonify({"error": "Not found."}), 404
-        requested = frontend_dist / path
-        if path and requested.is_file():
-            return send_from_directory(frontend_dist, path)
-        if (frontend_dist / "index.html").is_file():
-            return send_from_directory(frontend_dist, "index.html")
-        return jsonify({"error": "Frontend build not found."}), 404
+    # Traditional WSGI deployments can have Flask serve the Vite build. Vercel
+    # serves dist/ statically and invokes this Flask app only under /api.
+    if not app.config.get("SQLALCHEMY_SERVERLESS", False):
+        @app.route("/", defaults={"path": ""})
+        @app.route("/<path:path>")
+        def frontend(path):
+            if path == "api" or path.startswith("api/"):
+                return jsonify({"error": "Not found."}), 404
+            requested = frontend_dist / path
+            if path and requested.is_file():
+                return send_from_directory(frontend_dist, path)
+            if (frontend_dist / "index.html").is_file():
+                return send_from_directory(frontend_dist, "index.html")
+            return jsonify({"error": "Frontend build not found."}), 404
 
     return app
 
