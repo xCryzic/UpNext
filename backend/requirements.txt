@@ -5,3 +5,4 @@ gunicorn==23.0.0
 SQLAlchemy==2.0.41
 alembic==1.16.4
 psycopg[binary]==3.2.9
+gunicorn
