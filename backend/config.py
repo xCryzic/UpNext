@@ -22,6 +22,15 @@ def resolve_database_path(value=None):
     return BASE_DIR / path
 
 
+def normalize_database_url(value):
+    """Normalize provider PostgreSQL URLs for SQLAlchemy's psycopg driver."""
+    if value and value.startswith("postgres://"):
+        return "postgresql+psycopg://" + value.removeprefix("postgres://")
+    if value and value.startswith("postgresql://"):
+        return "postgresql+psycopg://" + value.removeprefix("postgresql://")
+    return value
+
+
 def validate_configuration(app_env, secret_key, configured_database_path):
     if app_env not in {"development", "production"}:
         raise RuntimeError("APP_ENV must be development or production.")
@@ -44,6 +53,7 @@ class Config:
 
     # Canonical local runtime database. Relative overrides are backend-relative.
     DATABASE_PATH = resolve_database_path()
+    DATABASE_URL = normalize_database_url(os.getenv("DATABASE_URL"))
 
     FRONTEND_ORIGIN = os.getenv("FRONTEND_URL", os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")).rstrip("/")
 
