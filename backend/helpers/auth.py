@@ -1,8 +1,10 @@
 from functools import wraps
 
 from flask import current_app, g, jsonify, session
+from sqlalchemy import select
 
-from database import get_db
+from database import sqlalchemy_session
+from models import Creator, User
 
 
 def require_login(view):
@@ -20,27 +22,16 @@ def require_login(view):
 def require_admin(view):
     @wraps(view)
     def wrapped(*args, **kwargs):
-        connection = get_db()
-        try:
-            user = connection.execute("SELECT email FROM users WHERE id = ?", (g.user_id,)).fetchone()
-        finally:
-            connection.close()
-        if not user or user["email"].lower() not in current_app.config.get("ADMIN_EMAILS", set()):
+        user = sqlalchemy_session().get(User, g.user_id)
+        if not user or user.email.lower() not in current_app.config.get("ADMIN_EMAILS", set()):
             return jsonify({"error": "Administrator access required."}), 403
         return view(*args, **kwargs)
     return wrapped
 
 
-def get_creator_for_user(connection, user_id):
-    return connection.execute(
-        "SELECT * FROM creators WHERE user_id = ?", (user_id,)
-    ).fetchone()
+def get_creator_for_user(db, user_id):
+    return db.scalar(select(Creator).where(Creator.user_id == user_id))
 
 
-def get_owned_creator(connection, user_id):
-    return get_creator_for_user(connection, user_id)
-
-
-def close_db(connection):
-    if connection:
-        connection.close()
+def get_owned_creator(db, user_id):
+    return get_creator_for_user(db, user_id)

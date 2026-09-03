@@ -2,7 +2,6 @@ import hmac
 import json
 import re
 import secrets
-import sqlite3
 from base64 import b64encode
 from datetime import datetime, timezone
 from urllib.error import HTTPError, URLError
@@ -11,7 +10,10 @@ from urllib.request import Request, urlopen
 
 from flask import Blueprint, current_app, g, jsonify, redirect, request, session
 
-from database import get_db
+from sqlalchemy import delete, select
+from sqlalchemy.exc import IntegrityError
+from database import sqlalchemy_session
+from models import Creator, SocialAccount, SpotifyOAuthAttempt
 from helpers.auth import require_login
 from services.rate_limit import rate_limit
 
@@ -29,16 +31,15 @@ SPOTIFY_OAUTH_SESSION_KEYS = ("spotify_oauth_state", "spotify_oauth_social_id")
 
 
 def owned_creator(connection):
-    return connection.execute("SELECT id FROM creators WHERE user_id = ?", (g.user_id,)).fetchone()
+    return connection.scalar(select(Creator).where(Creator.user_id == g.user_id))
 
 
 def serialize_social(row):
-    keys = ("id", "platform", "username", "profile_url", "follower_count", "ownership_verified", "eligibility_verified", "verification_status", "verified_at", "last_checked_at", "created_at", "updated_at")
-    return {key: row[key] for key in keys}
+    return {"id": row.id, "platform": row.platform, "username": row.username, "profile_url": row.profile_url, "follower_count": row.follower_count, "ownership_verified": bool(row.ownership_verified), "eligibility_verified": bool(row.eligibility_verified), "verification_status": row.verification_status, "verified_at": row.verified_at.isoformat() if row.verified_at else None, "last_checked_at": row.last_checked_at.isoformat() if row.last_checked_at else None, "created_at": row.created_at.isoformat() if row.created_at else None, "updated_at": row.updated_at.isoformat() if row.updated_at else None}
 
 
 def social_by_id(connection, social_id):
-    return connection.execute("SELECT * FROM social_accounts WHERE id = ?", (social_id,)).fetchone()
+    return connection.get(SocialAccount, social_id)
 
 
 def clear_oauth_context():
@@ -100,7 +101,7 @@ def validate(data):
 
 
 def get_owned_social(connection, social_id):
-    return connection.execute("SELECT social_accounts.* FROM social_accounts JOIN creators ON creators.id = social_accounts.creator_id WHERE social_accounts.id = ? AND creators.user_id = ?", (social_id, g.user_id)).fetchone()
+    return connection.scalar(select(SocialAccount).join(Creator, SocialAccount.creator_id == Creator.id).where(SocialAccount.id == social_id, Creator.user_id == g.user_id))
 
 
 def github_token_exchange(code):
@@ -149,15 +150,14 @@ def spotify_authenticated_user(access_token):
 @socials_bp.get("/api/creator/socials")
 @require_login
 def list_socials():
-    connection = get_db()
+    connection = sqlalchemy_session()
     try:
         creator = owned_creator(connection)
         if not creator:
             return jsonify({"social_accounts": []})
-        rows = connection.execute("SELECT * FROM social_accounts WHERE creator_id = ? ORDER BY id", (creator["id"],)).fetchall()
+        rows = connection.scalars(select(SocialAccount).where(SocialAccount.creator_id == creator.id).order_by(SocialAccount.id)).all()
         return jsonify({"social_accounts": [serialize_social(row) for row in rows]})
-    finally:
-        connection.close()
+    finally: pass
 
 @socials_bp.post("/api/creator/socials")
 @require_login
@@ -165,18 +165,19 @@ def create_social():
     values, error = validate(request.get_json(silent=True) or {})
     if error:
         return jsonify({"error": error}), 400
-    connection = get_db()
+    connection = sqlalchemy_session()
     try:
         creator = owned_creator(connection)
         if not creator:
             return jsonify({"error": "Create a creator profile first."}), 400
-        cursor = connection.execute("INSERT INTO social_accounts (creator_id, platform, username, profile_url) VALUES (?, ?, ?, ?)", (creator["id"], *values))
+        social = SocialAccount(creator_id=creator.id, platform=values[0], username=values[1], profile_url=values[2])
+        connection.add(social)
         connection.commit()
-        return jsonify({"social_account": serialize_social(social_by_id(connection, cursor.lastrowid))}), 201
-    except sqlite3.IntegrityError:
+        return jsonify({"social_account": serialize_social(social)}), 201
+    except IntegrityError:
+        connection.rollback()
         return jsonify({"error": "Could not create social account."}), 409
-    finally:
-        connection.close()
+    finally: pass
 
 
 @socials_bp.patch("/api/creator/socials/<int:social_id>")
@@ -184,7 +185,7 @@ def create_social():
 @require_login
 def update_social(social_id):
     data = request.get_json(silent=True) or {}
-    connection = get_db()
+    connection = sqlalchemy_session()
     try:
         row = get_owned_social(connection, social_id)
         if not row:
@@ -196,36 +197,31 @@ def update_social(social_id):
             return jsonify({"error": "Invalid profile URL."}), 400
         if not updates:
             return jsonify({"error": "No editable fields provided."}), 400
-        final_platform = updates.get("platform", row["platform"])
-        final_username = updates.get("username", row["username"])
-        final_url = updates.get("profile_url", row["profile_url"])
-        original_identity = github_login_from_claim(row["username"], row["profile_url"]) if row["platform"] == "GitHub" else spotify_user_id_from_claim(row["username"], row["profile_url"]) if row["platform"] == "Spotify" else None
+        final_platform = updates.get("platform", row.platform)
+        final_username = updates.get("username", row.username)
+        final_url = updates.get("profile_url", row.profile_url)
+        original_identity = github_login_from_claim(row.username, row.profile_url) if row.platform == "GitHub" else spotify_user_id_from_claim(row.username, row.profile_url) if row.platform == "Spotify" else None
         final_identity = github_login_from_claim(final_username, final_url) if final_platform == "GitHub" else spotify_user_id_from_claim(final_username, final_url) if final_platform == "Spotify" else None
-        identity_changed = row["platform"] in {"GitHub", "Spotify"} and (final_platform != row["platform"] or original_identity != final_identity)
-        assignments = [f"{field} = ?" for field in updates]
-        values = list(updates.values())
+        identity_changed = row.platform in {"GitHub", "Spotify"} and (final_platform != row.platform or original_identity != final_identity)
+        for field, value in updates.items(): setattr(row, field, value)
         if identity_changed:
-            assignments.extend(["ownership_verified = 0", "verification_status = 'unverified'", "verified_at = NULL", "provider_account_id = NULL"])
-        assignments.append("updated_at = CURRENT_TIMESTAMP")
-        connection.execute(f"UPDATE social_accounts SET {', '.join(assignments)} WHERE id = ?", [*values, social_id])
+            row.ownership_verified = False; row.verification_status = "unverified"; row.verified_at = None; row.provider_account_id = None
         connection.commit()
         return jsonify({"social_account": serialize_social(social_by_id(connection, social_id))})
-    finally:
-        connection.close()
+    finally: pass
 
 
 @socials_bp.delete("/api/creator/socials/<int:social_id>")
 @require_login
 def delete_social(social_id):
-    connection = get_db()
+    connection = sqlalchemy_session()
     try:
         if not get_owned_social(connection, social_id):
             return jsonify({"error": "Social account not found."}), 404
-        connection.execute("DELETE FROM social_accounts WHERE id = ?", (social_id,))
+        connection.delete(get_owned_social(connection, social_id))
         connection.commit()
         return jsonify({"status": "ok"})
-    finally:
-        connection.close()
+    finally: pass
 
 
 @socials_bp.get("/api/creator/socials/<int:social_id>/verify/github")
@@ -234,25 +230,24 @@ def delete_social(social_id):
 def start_github_verification(social_id):
     if not current_app.config.get("GITHUB_CLIENT_ID") or not current_app.config.get("GITHUB_CLIENT_SECRET") or not current_app.config.get("GITHUB_OAUTH_CALLBACK_URL"):
         return jsonify({"error": "GitHub verification is not configured."}), 503
-    connection = get_db()
+    connection = sqlalchemy_session()
     try:
         social = get_owned_social(connection, social_id)
         if not social:
             return jsonify({"error": "Social account not found."}), 404
-        if social["platform"] != "GitHub":
+        if social.platform != "GitHub":
             return jsonify({"error": "GitHub verification is only available for GitHub accounts."}), 400
-        claimed_login = github_login_from_claim(social["username"], social["profile_url"])
+        claimed_login = github_login_from_claim(social.username, social.profile_url)
         if not claimed_login:
             return jsonify({"error": "Use a matching GitHub username and profile URL such as https://github.com/username before verifying."}), 400
         state = secrets.token_urlsafe(32)
         session["github_oauth_state"] = state
-        session["github_oauth_social_id"] = social["id"]
+        session["github_oauth_social_id"] = social.id
         session["github_oauth_claimed_login"] = claimed_login
         session["github_oauth_user_id"] = g.user_id
         query = urlencode({"client_id": current_app.config["GITHUB_CLIENT_ID"], "redirect_uri": current_app.config["GITHUB_OAUTH_CALLBACK_URL"], "state": state, "scope": "read:user"})
         return redirect(f"{GITHUB_AUTHORIZE_URL}?{query}")
-    finally:
-        connection.close()
+    finally: pass
 
 
 @socials_bp.get("/api/creator/socials/github/callback")
@@ -275,16 +270,15 @@ def github_verification_callback():
     github_user = github_authenticated_user(access_token) if access_token else None
     if not github_user or str(github_user["login"]).casefold() != str(stored_claimed_login).casefold():
         return oauth_redirect("failed")
-    connection = get_db()
+    connection = sqlalchemy_session()
     try:
         social = get_owned_social(connection, int(stored_social_id))
-        if not social or social["platform"] != "GitHub" or github_login_from_claim(social["username"], social["profile_url"]) != stored_claimed_login:
+        if not social or social.platform != "GitHub" or github_login_from_claim(social.username, social.profile_url) != stored_claimed_login:
             return oauth_redirect("failed")
-        connection.execute("UPDATE social_accounts SET ownership_verified = 1, verification_status = 'verified', verified_at = ?, provider_account_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (datetime.now(timezone.utc).isoformat(), str(github_user["id"]), social["id"]))
+        social.ownership_verified = True; social.verification_status = "verified"; social.verified_at = datetime.now(timezone.utc); social.provider_account_id = str(github_user["id"])
         connection.commit()
         return oauth_redirect("success")
-    finally:
-        connection.close()
+    finally: pass
 
 
 @socials_bp.get("/api/creator/socials/<int:social_id>/verify/spotify")
@@ -293,27 +287,26 @@ def github_verification_callback():
 def start_spotify_verification(social_id):
     if not current_app.config.get("SPOTIFY_CLIENT_ID") or not current_app.config.get("SPOTIFY_CLIENT_SECRET") or not current_app.config.get("SPOTIFY_OAUTH_CALLBACK_URL"):
         return jsonify({"error": "Spotify verification is not configured."}), 503
-    connection = get_db()
+    connection = sqlalchemy_session()
     try:
         social = get_owned_social(connection, social_id)
         if not social:
             return jsonify({"error": "Social account not found."}), 404
-        if social["platform"] != "Spotify":
+        if social.platform != "Spotify":
             return jsonify({"error": "Spotify verification is only available for Spotify user accounts."}), 400
-        claimed_user_id = spotify_user_id_from_claim(social["username"], social["profile_url"])
+        claimed_user_id = spotify_user_id_from_claim(social.username, social.profile_url)
         if not claimed_user_id:
             return jsonify({"error": "Use a matching Spotify user ID and user URL such as https://open.spotify.com/user/your-user-id before verifying. Artist and catalog URLs cannot be verified here."}), 400
         state = secrets.token_urlsafe(32)
         # The session records the active flow. The database attempt also bridges Spotify's required 127.0.0.1 callback host.
         session["spotify_oauth_state"] = state
-        session["spotify_oauth_social_id"] = social["id"]
-        connection.execute("DELETE FROM spotify_oauth_attempts WHERE social_id = ?", (social["id"],))
-        connection.execute("INSERT INTO spotify_oauth_attempts (state, social_id, user_id, claimed_user_id) VALUES (?, ?, ?, ?)", (state, social["id"], g.user_id, claimed_user_id))
+        session["spotify_oauth_social_id"] = social.id
+        connection.execute(delete(SpotifyOAuthAttempt).where(SpotifyOAuthAttempt.social_id == social.id))
+        connection.add(SpotifyOAuthAttempt(state=state, social_id=social.id, user_id=g.user_id, claimed_user_id=claimed_user_id))
         connection.commit()
         query = urlencode({"client_id": current_app.config["SPOTIFY_CLIENT_ID"], "response_type": "code", "redirect_uri": current_app.config["SPOTIFY_OAUTH_CALLBACK_URL"], "state": state, "scope": "user-read-private"})
         return redirect(f"{SPOTIFY_AUTHORIZE_URL}?{query}")
-    finally:
-        connection.close()
+    finally: pass
 
 
 @socials_bp.get("/api/creator/socials/spotify/callback")
@@ -322,14 +315,14 @@ def spotify_verification_callback():
     clear_spotify_oauth_context()
     if not received_state:
         return oauth_redirect("failed")
-    connection = get_db()
+    connection = sqlalchemy_session()
     try:
-        attempt = connection.execute("SELECT * FROM spotify_oauth_attempts WHERE state = ?", (received_state,)).fetchone()
+        attempt = connection.get(SpotifyOAuthAttempt, received_state)
         # Consume a valid attempt before exchanging a code: no OAuth state is reusable.
         if attempt:
-            connection.execute("DELETE FROM spotify_oauth_attempts WHERE state = ?", (received_state,))
+            connection.delete(attempt)
             connection.commit()
-        if not attempt or not hmac.compare_digest(str(attempt["state"]), received_state):
+        if not attempt or not hmac.compare_digest(str(attempt.state), received_state):
             return oauth_redirect("failed")
         if request.args.get("error"):
             return oauth_redirect("denied")
@@ -338,13 +331,12 @@ def spotify_verification_callback():
             return oauth_redirect("failed")
         access_token = spotify_token_exchange(code)
         spotify_user = spotify_authenticated_user(access_token) if access_token else None
-        if not spotify_user or str(spotify_user["id"]) != attempt["claimed_user_id"]:
+        if not spotify_user or str(spotify_user["id"]) != attempt.claimed_user_id:
             return oauth_redirect("failed")
-        social = connection.execute("SELECT social_accounts.* FROM social_accounts JOIN creators ON creators.id = social_accounts.creator_id WHERE social_accounts.id = ? AND creators.user_id = ?", (attempt["social_id"], attempt["user_id"])).fetchone()
-        if not social or social["platform"] != "Spotify" or spotify_user_id_from_claim(social["username"], social["profile_url"]) != attempt["claimed_user_id"]:
+        social = connection.scalar(select(SocialAccount).join(Creator, SocialAccount.creator_id == Creator.id).where(SocialAccount.id == attempt.social_id, Creator.user_id == attempt.user_id))
+        if not social or social.platform != "Spotify" or spotify_user_id_from_claim(social.username, social.profile_url) != attempt.claimed_user_id:
             return oauth_redirect("failed")
-        connection.execute("UPDATE social_accounts SET ownership_verified = 1, verification_status = 'verified', verified_at = ?, provider_account_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (datetime.now(timezone.utc).isoformat(), str(spotify_user["account_id"]), social["id"]))
+        social.ownership_verified = True; social.verification_status = "verified"; social.verified_at = datetime.now(timezone.utc); social.provider_account_id = str(spotify_user["account_id"])
         connection.commit()
         return oauth_redirect("success")
-    finally:
-        connection.close()
+    finally: pass

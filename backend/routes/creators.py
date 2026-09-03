@@ -1,278 +1,110 @@
 import re
-import sqlite3
-
-from flask import Blueprint, g, jsonify, request
-
-from database import get_db
+from flask import Blueprint,g,jsonify,request
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
+from database import sqlalchemy_session
+from models import Creator,CreatorCategory,CreatorSkill,CreatorLookingFor,Project,SocialAccount
 from helpers.auth import require_login
-from services.discovery_service import calculate_profile_strength, sort_profiles
-
-creators_bp = Blueprint("creators", __name__)
-
-CATEGORIES = {
-    "Artist", "Musician", "Developer", "Game Developer", "Video Creator",
-    "Writer", "Photographer", "Designer", "3D Artist", "Other",
-}
-VERIFIABLE_PLATFORMS = {"GitHub", "Spotify"}
-
-
-def clean_list(value):
-    if value is None:
-        return []
-    if not isinstance(value, list):
-        raise ValueError("must be a list")
-    return list(dict.fromkeys(item.strip() for item in value if isinstance(item, str) and item.strip()))
-
-
-def validate_username(username):
-    return bool(re.fullmatch(r"[a-z0-9](?:[a-z0-9_.-]{1,28}[a-z0-9])?", username))
-
-
-def creator_id_for_user(connection):
-    row = connection.execute("SELECT id FROM creators WHERE user_id = ?", (g.user_id,)).fetchone()
-    return row["id"] if row else None
-
-
-def relation_values(connection, table, column, creator_id):
-    return [row[column] for row in connection.execute(
-        f"SELECT {column} FROM {table} WHERE creator_id = ? ORDER BY {column}", (creator_id,)
-    ).fetchall()]
-
-
-def publishability(connection, creator):
-    creator_id = creator["id"]
-    missing = []
-    required = {
-        "display_name": bool(creator["display_name"]),
-        "username": bool(creator["username"]),
-        "bio": bool((creator["bio"] or "").strip()),
-        "category": bool(relation_values(connection, "creator_categories", "category", creator_id)),
-        "skill": bool(relation_values(connection, "creator_skills", "skill", creator_id)),
-        "project": connection.execute("SELECT 1 FROM projects WHERE creator_id = ? LIMIT 1", (creator_id,)).fetchone() is not None,
-        "social_account": connection.execute("SELECT 1 FROM social_accounts WHERE creator_id = ? LIMIT 1", (creator_id,)).fetchone() is not None,
-    }
-    for key, present in required.items():
-        if not present:
-            missing.append(key)
-    return {"publishable": not missing, "missing": missing}
-
-
-def serialize_creator(connection, creator, include_owner=False):
-    creator_id = creator["id"]
-    socials = []
-    for row in connection.execute("SELECT * FROM social_accounts WHERE creator_id = ? ORDER BY id", (creator_id,)).fetchall():
-        item = {
-            "id": row["id"], "platform": row["platform"], "username": row["username"],
-            "profile_url": row["profile_url"], "ownership_verified": bool(row["ownership_verified"]),
-            "eligibility_verified": bool(row["eligibility_verified"]),
-            "verification_status": row["verification_status"], "verified_at": row["verified_at"],
-            "last_checked_at": row["last_checked_at"],
-        }
-        if row["eligibility_verified"] and row["follower_count"] is not None:
-            item["follower_count"] = row["follower_count"]
-        socials.append(item)
-    verified_social_count = sum(
-        1 for social in socials
-        if social["platform"] in VERIFIABLE_PLATFORMS and social["ownership_verified"] and social["verification_status"] == "verified"
-    )
-    result = {
-        "id": creator_id, "display_name": creator["display_name"], "username": creator["username"],
-        "bio": creator["bio"] or "", "avatar": creator["avatar"] or "", "location": creator["location"],
-        "website": creator["website"], "categories": relation_values(connection, "creator_categories", "category", creator_id),
-        "skills": relation_values(connection, "creator_skills", "skill", creator_id),
-        "looking_for": relation_values(connection, "creator_looking_for", "item", creator_id),
-        "social_accounts": socials,
-        "projects": [dict(row) for row in connection.execute("SELECT id, title, description, type, url, created_at, updated_at FROM projects WHERE creator_id = ? ORDER BY created_at DESC", (creator_id,)).fetchall()],
-        "created_at": creator["created_at"], "updated_at": creator["updated_at"],
-        "publishability": publishability(connection, creator),
-        "is_public": bool(creator["is_public"]),
-        "verified_social_count": verified_social_count,
-    }
-    result["profile_strength"] = calculate_profile_strength(result)
-    if include_owner:
-        result["user_id"] = creator["user_id"]
-    return result
-
-
-def save_relations(connection, creator_id, categories, skills, looking_for):
-    for table, column, values in (
-        ("creator_categories", "category", categories),
-        ("creator_skills", "skill", skills),
-        ("creator_looking_for", "item", looking_for),
-    ):
-        connection.execute(f"DELETE FROM {table} WHERE creator_id = ?", (creator_id,))
-        connection.executemany(f"INSERT INTO {table} (creator_id, {column}) VALUES (?, ?)", [(creator_id, value) for value in values])
-
-
+from services.discovery_service import calculate_profile_strength,sort_profiles
+creators_bp=Blueprint("creators",__name__);CATEGORIES={"Artist","Musician","Developer","Game Developer","Video Creator","Writer","Photographer","Designer","3D Artist","Other"};VERIFIABLE_PLATFORMS={"GitHub","Spotify"}
+def clean_list(v):
+ if v is None:return []
+ if not isinstance(v,list):raise ValueError
+ return list(dict.fromkeys(x.strip() for x in v if isinstance(x,str) and x.strip()))
+def validate_username(v):return bool(re.fullmatch(r"[a-z0-9](?:[a-z0-9_.-]{1,28}[a-z0-9])?",v))
+def rel(db,m,f,cid):return list(db.scalars(select(getattr(m,f)).where(m.creator_id==cid).order_by(getattr(m,f))))
+def publishability(db,c):
+ if not c:return {"publishable":False,"missing":["profile"]}
+ r={"display_name":bool(c.display_name),"username":bool(c.username),"bio":bool((c.bio or "").strip()),"category":bool(rel(db,CreatorCategory,"category",c.id)),"skill":bool(rel(db,CreatorSkill,"skill",c.id)),"project":db.scalar(select(Project.id).where(Project.creator_id==c.id).limit(1)) is not None,"social_account":db.scalar(select(SocialAccount.id).where(SocialAccount.creator_id==c.id).limit(1)) is not None};return {"publishable":not [x for x in r if not r[x]],"missing":[x for x in r if not r[x]]}
+def iso(v):return v.isoformat() if v else None
+def serialize_creator(db,c,include_owner=False):
+ socials=[]
+ for s in db.scalars(select(SocialAccount).where(SocialAccount.creator_id==c.id).order_by(SocialAccount.id)):
+  x={"id":s.id,"platform":s.platform,"username":s.username,"profile_url":s.profile_url,"ownership_verified":bool(s.ownership_verified),"eligibility_verified":bool(s.eligibility_verified),"verification_status":s.verification_status,"verified_at":iso(s.verified_at),"last_checked_at":iso(s.last_checked_at)}
+  if s.eligibility_verified and s.follower_count is not None:x["follower_count"]=s.follower_count
+  socials.append(x)
+ out={"id":c.id,"display_name":c.display_name,"username":c.username,"bio":c.bio or "","avatar":c.avatar or "","location":c.location,"website":c.website,"categories":rel(db,CreatorCategory,"category",c.id),"skills":rel(db,CreatorSkill,"skill",c.id),"looking_for":rel(db,CreatorLookingFor,"item",c.id),"social_accounts":socials,"projects":[{"id":p.id,"title":p.title,"description":p.description,"type":p.type,"url":p.url,"created_at":iso(p.created_at),"updated_at":iso(p.updated_at)} for p in db.scalars(select(Project).where(Project.creator_id==c.id).order_by(Project.created_at.desc()))],"created_at":iso(c.created_at),"updated_at":iso(c.updated_at),"publishability":publishability(db,c),"is_public":bool(c.is_public),"verified_social_count":sum(x["platform"] in VERIFIABLE_PLATFORMS and x["ownership_verified"] and x["verification_status"]=="verified" for x in socials)};out["profile_strength"]=calculate_profile_strength(out)
+ if include_owner:out["user_id"]=c.user_id
+ return out
+def save_rel(db,cid,cats,skills,looking):
+ for m,f,v in ((CreatorCategory,"category",cats),(CreatorSkill,"skill",skills),(CreatorLookingFor,"item",looking)):
+  db.query(m).filter_by(creator_id=cid).delete();db.add_all([m(creator_id=cid,**{f:x}) for x in v])
+def mine(db):return db.scalar(select(Creator).where(Creator.user_id==g.user_id))
 @creators_bp.get("/api/creator/me")
 @require_login
 def get_my_creator():
-    connection = get_db()
-    try:
-        creator = connection.execute("SELECT * FROM creators WHERE user_id = ?", (g.user_id,)).fetchone()
-        return jsonify({"creator": serialize_creator(connection, creator, True) if creator else None})
-    finally:
-        connection.close()
-
-
+ db=sqlalchemy_session();c=mine(db);return jsonify({"creator":serialize_creator(db,c,True) if c else None})
 @creators_bp.post("/api/creator")
 @require_login
 def create_creator():
-    data = request.get_json(silent=True) or {}
-    username = str(data.get("username", "")).strip().lower()
-    display_name = str(data.get("display_name", "")).strip()
-    if not display_name or not username:
-        return jsonify({"error": "display_name and username are required."}), 400
-    if not validate_username(username):
-        return jsonify({"error": "Username must be 3-30 lowercase letters, numbers, dots, dashes, or underscores."}), 400
-    try:
-        categories = clean_list(data.get("categories"))
-        skills = clean_list(data.get("skills"))
-        looking_for = clean_list(data.get("looking_for"))
-    except ValueError:
-        return jsonify({"error": "categories, skills, and looking_for must be lists."}), 400
-    invalid = [item for item in categories if item not in CATEGORIES]
-    if invalid:
-        return jsonify({"error": "Unsupported category.", "invalid": invalid}), 400
-    connection = get_db()
-    try:
-        if connection.execute("SELECT 1 FROM creators WHERE user_id = ?", (g.user_id,)).fetchone():
-            return jsonify({"error": "You already have a creator profile."}), 409
-        cursor = connection.execute("INSERT INTO creators (user_id, display_name, username, bio, avatar, location, website) VALUES (?, ?, ?, ?, ?, ?, ?)", (g.user_id, display_name, username, str(data.get("bio", "")).strip(), str(data.get("avatar", "")).strip(), data.get("location"), data.get("website")))
-        save_relations(connection, cursor.lastrowid, categories, skills, looking_for)
-        connection.commit()
-        creator = connection.execute("SELECT * FROM creators WHERE id = ?", (cursor.lastrowid,)).fetchone()
-        return jsonify({"creator": serialize_creator(connection, creator, True)}), 201
-    except sqlite3.IntegrityError:
-        return jsonify({"error": "That username is already in use."}), 409
-    finally:
-        connection.close()
-
-
+ d=request.get_json(silent=True) or {};u=str(d.get("username","")).strip().lower();name=str(d.get("display_name","")).strip()
+ if not name or not u:return jsonify({"error":"display_name and username are required."}),400
+ if not validate_username(u):return jsonify({"error":"Username must be 3-30 lowercase letters, numbers, dots, dashes, or underscores."}),400
+ try:cats,skills,looking=clean_list(d.get("categories")),clean_list(d.get("skills")),clean_list(d.get("looking_for"))
+ except ValueError:return jsonify({"error":"categories, skills, and looking_for must be lists."}),400
+ invalid=[x for x in cats if x not in CATEGORIES]
+ if invalid:return jsonify({"error":"Unsupported category.","invalid":invalid}),400
+ db=sqlalchemy_session()
+ if mine(db):return jsonify({"error":"You already have a creator profile."}),409
+ try:
+  c=Creator(user_id=g.user_id,display_name=name,username=u,bio=str(d.get("bio","")).strip(),avatar=str(d.get("avatar","")).strip(),location=d.get("location"),website=d.get("website"));db.add(c);db.flush();save_rel(db,c.id,cats,skills,looking);db.commit();return jsonify({"creator":serialize_creator(db,c,True)}),201
+ except IntegrityError:db.rollback();return jsonify({"error":"That username is already in use."}),409
 @creators_bp.patch("/api/creator")
 @creators_bp.put("/api/creator")
 @require_login
 def update_creator():
-    data = request.get_json(silent=True) or {}
-    connection = get_db()
-    try:
-        creator = connection.execute("SELECT * FROM creators WHERE user_id = ?", (g.user_id,)).fetchone()
-        if not creator:
-            return jsonify({"error": "Creator profile not found."}), 404
-        fields = {"display_name", "bio", "avatar", "location", "website"}
-        updates = {field: data[field] for field in fields if field in data}
-        if "username" in data:
-            username = str(data["username"]).strip().lower()
-            if not validate_username(username):
-                return jsonify({"error": "Invalid username."}), 400
-            updates["username"] = username
-        categories = skills = looking_for = None
-        try:
-            if "categories" in data: categories = clean_list(data["categories"])
-            if "skills" in data: skills = clean_list(data["skills"])
-            if "looking_for" in data: looking_for = clean_list(data["looking_for"])
-        except ValueError:
-            return jsonify({"error": "categories, skills, and looking_for must be lists."}), 400
-        if categories is not None:
-            invalid = [item for item in categories if item not in CATEGORIES]
-            if invalid: return jsonify({"error": "Unsupported category.", "invalid": invalid}), 400
-        if updates:
-            updates["updated_at"] = "CURRENT_TIMESTAMP"
-            assignments = ", ".join(f"{field} = ?" for field in updates if field != "updated_at") + ", updated_at = CURRENT_TIMESTAMP"
-            values = [updates[field] for field in updates if field != "updated_at"] + [g.user_id]
-            connection.execute(f"UPDATE creators SET {assignments} WHERE user_id = ?", values)
-        if categories is not None or skills is not None or looking_for is not None:
-            current = {"categories": relation_values(connection, "creator_categories", "category", creator["id"]), "skills": relation_values(connection, "creator_skills", "skill", creator["id"]), "looking_for": relation_values(connection, "creator_looking_for", "item", creator["id"])}
-            save_relations(connection, creator["id"], categories if categories is not None else current["categories"], skills if skills is not None else current["skills"], looking_for if looking_for is not None else current["looking_for"])
-        connection.commit()
-        creator = connection.execute("SELECT * FROM creators WHERE user_id = ?", (g.user_id,)).fetchone()
-        return jsonify({"creator": serialize_creator(connection, creator, True)})
-    except sqlite3.IntegrityError:
-        return jsonify({"error": "That username is already in use."}), 409
-    finally:
-        connection.close()
-
-
+ d=request.get_json(silent=True) or {};db=sqlalchemy_session();c=mine(db)
+ if not c:return jsonify({"error":"Creator profile not found."}),404
+ try:
+  if "username" in d:
+   u=str(d["username"]).strip().lower()
+   if not validate_username(u):return jsonify({"error":"Invalid username."}),400
+   c.username=u
+  for f in ("display_name","bio","avatar","location","website"):
+   if f in d:setattr(c,f,d[f])
+  vals=[]
+  for key in ("categories","skills","looking_for"):
+   if key in d:vals.append(clean_list(d[key]))
+   else:vals.append(rel(db,{"categories":CreatorCategory,"skills":CreatorSkill,"looking_for":CreatorLookingFor}[key],{"categories":"category","skills":"skill","looking_for":"item"}[key],c.id))
+  if any(k in d for k in ("categories","skills","looking_for")):
+   invalid=[x for x in vals[0] if x not in CATEGORIES]
+   if invalid:return jsonify({"error":"Unsupported category.","invalid":invalid}),400
+   save_rel(db,c.id,*vals)
+  db.commit();return jsonify({"creator":serialize_creator(db,c,True)})
+ except ValueError:return jsonify({"error":"categories, skills, and looking_for must be lists."}),400
+ except IntegrityError:db.rollback();return jsonify({"error":"That username is already in use."}),409
 @creators_bp.delete("/api/creator")
 @require_login
 def delete_creator():
-    connection = get_db()
-    try:
-        connection.execute("DELETE FROM creators WHERE user_id = ?", (g.user_id,))
-        connection.commit()
-        return jsonify({"status": "ok"})
-    finally:
-        connection.close()
-
-
+ db=sqlalchemy_session();c=mine(db)
+ if c:db.delete(c);db.commit()
+ return jsonify({"status":"ok"})
 @creators_bp.patch("/api/creator/visibility")
 @require_login
 def update_creator_visibility():
-    data = request.get_json(silent=True) or {}
-    if not isinstance(data.get("is_public"), bool):
-        return jsonify({"error": "is_public must be true or false."}), 400
-    connection = get_db()
-    try:
-        creator = connection.execute("SELECT * FROM creators WHERE user_id = ?", (g.user_id,)).fetchone()
-        if not creator:
-            return jsonify({"error": "Creator profile not found."}), 404
-        if data["is_public"] and not publishability(connection, creator)["publishable"]:
-            return jsonify({"error": "Complete the required profile sections before publishing."}), 400
-        connection.execute("UPDATE creators SET is_public = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (int(data["is_public"]), creator["id"]))
-        connection.commit()
-        creator = connection.execute("SELECT * FROM creators WHERE id = ?", (creator["id"],)).fetchone()
-        return jsonify({"creator": serialize_creator(connection, creator, True)})
-    finally:
-        connection.close()
-
-
+ d=request.get_json(silent=True) or {}
+ if not isinstance(d.get("is_public"),bool):return jsonify({"error":"is_public must be true or false."}),400
+ db=sqlalchemy_session();c=mine(db)
+ if not c:return jsonify({"error":"Creator profile not found."}),404
+ if d["is_public"] and not publishability(db,c)["publishable"]:return jsonify({"error":"Complete the required profile sections before publishing."}),400
+ c.is_public=d["is_public"];db.commit();return jsonify({"creator":serialize_creator(db,c,True)})
 @creators_bp.get("/api/creators")
 def list_creators():
-    search = request.args.get("search", "").strip()
-    category = request.args.get("category", "").strip()
-    sort = request.args.get("sort", "discover")
-    try:
-        limit = min(max(int(request.args.get("limit", 20)), 1), 100)
-        offset = max(int(request.args.get("offset", 0)), 0)
-    except ValueError:
-        return jsonify({"error": "limit and offset must be integers."}), 400
-    connection = get_db()
-    try:
-        rows = connection.execute("SELECT * FROM creators ORDER BY updated_at DESC").fetchall()
-        profiles = [serialize_creator(connection, row) for row in rows]
-        profiles = [profile for profile in profiles if profile["publishability"]["publishable"] and profile.get("is_public", True)]
-        if category:
-            profiles = [profile for profile in profiles if category in profile["categories"]]
-        if search:
-            needle = search.lower()
-            profiles = [profile for profile in profiles if needle in " ".join([profile["display_name"], profile["username"], profile["bio"], " ".join(profile["categories"]), " ".join(profile["skills"]), " ".join(profile["looking_for"]), " ".join(project["title"] + " " + project["description"] for project in profile["projects"])]).lower()]
-        profiles = sort_profiles(profiles, sort, search, category)
-        return jsonify({"creators": profiles[offset:offset + limit], "total": len(profiles), "limit": limit, "offset": offset})
-    finally:
-        connection.close()
-
-
+ search=request.args.get("search","").strip();category=request.args.get("category","").strip();sort=request.args.get("sort","discover")
+ try:limit=min(max(int(request.args.get("limit",20)),1),100);offset=max(int(request.args.get("offset",0)),0)
+ except ValueError:return jsonify({"error":"limit and offset must be integers."}),400
+ db=sqlalchemy_session();ps=[serialize_creator(db,c) for c in db.scalars(select(Creator).order_by(Creator.updated_at.desc()))];ps=[p for p in ps if p["publishability"]["publishable"] and p["is_public"]]
+ if category:ps=[p for p in ps if category in p["categories"]]
+ if search:
+  n=search.lower();ps=[p for p in ps if n in " ".join([p["display_name"],p["username"],p["bio"]," ".join(p["categories"])," ".join(p["skills"])," ".join(p["looking_for"])," ".join(x["title"]+" "+x["description"] for x in p["projects"])]).lower()]
+ ps=sort_profiles(ps,sort,search,category);return jsonify({"creators":ps[offset:offset+limit],"total":len(ps),"limit":limit,"offset":offset})
 @creators_bp.get("/api/creators/<username>")
 def public_creator(username):
-    connection = get_db()
-    try:
-        creator = connection.execute("SELECT * FROM creators WHERE username = ?", (username.strip().lower(),)).fetchone()
-        if not creator:
-            return jsonify({"error": "Creator not found."}), 404
-        result = serialize_creator(connection, creator)
-        if not result["publishability"]["publishable"] or not creator["is_public"]:
-            return jsonify({"error": "Creator not found."}), 404
-        return jsonify({"creator": result})
-    finally:
-        connection.close()
-
-
+ db=sqlalchemy_session();c=db.scalar(select(Creator).where(Creator.username==username.strip().lower()))
+ if not c:return jsonify({"error":"Creator not found."}),404
+ r=serialize_creator(db,c)
+ if not r["publishability"]["publishable"] or not c.is_public:return jsonify({"error":"Creator not found."}),404
+ return jsonify({"creator":r})
 @creators_bp.get("/api/creator/status")
 @require_login
-def creator_status():
-    connection = get_db()
-    try:
-        creator = connection.execute("SELECT * FROM creators WHERE user_id = ?", (g.user_id,)).fetchone()
-        return jsonify(publishability(connection, creator) if creator else {"publishable": False, "missing": ["profile"]})
-    finally:
-        connection.close()
+def creator_status():return jsonify(publishability(sqlalchemy_session(),mine(sqlalchemy_session())))

@@ -1,74 +1,37 @@
-from flask import Blueprint, current_app, jsonify, request, session
-from werkzeug.security import check_password_hash, generate_password_hash
-
-from database import get_db
+from flask import Blueprint,current_app,jsonify,request,session
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
+from werkzeug.security import check_password_hash,generate_password_hash
+from database import sqlalchemy_session
+from models import User
 from services.rate_limit import rate_limit
-
-auth_bp = Blueprint("auth", __name__)
-
-
-def user_response(row):
-    return {
-        "id": str(row["id"]),
-        "email": row["email"],
-        "is_admin": row["email"].lower() in current_app.config.get("ADMIN_EMAILS", set()),
-    }
-
-
+auth_bp=Blueprint("auth",__name__)
+def user_response(user):return {"id":str(user.id),"email":user.email,"is_admin":user.email.lower() in current_app.config.get("ADMIN_EMAILS",set())}
 @auth_bp.post("/api/auth/signup")
-@rate_limit("RATE_LIMIT_SIGNUP_PER_MINUTE", 5)
+@rate_limit("RATE_LIMIT_SIGNUP_PER_MINUTE",5)
 def signup():
-    data = request.get_json(silent=True) or {}
-    email = str(data.get("email", "")).strip().lower()
-    password = data.get("password", "")
-    if not email: return jsonify({"error": "Email is required."}), 400
-    if not password: return jsonify({"error": "Password is required."}), 400
-    if len(password) < 8: return jsonify({"error": "Password must be at least 8 characters."}), 400
-    connection = get_db()
-    try:
-        if connection.execute("SELECT id FROM users WHERE email = ?", (email,)).fetchone():
-            return jsonify({"error": "An account with this email already exists."}), 409
-        cursor = connection.execute("INSERT INTO users (email, password_hash) VALUES (?, ?)", (email, generate_password_hash(password)))
-        connection.commit()
-        session.clear()
-        session["user_id"] = cursor.lastrowid
-        return jsonify({"user": {"id": str(cursor.lastrowid), "email": email}}), 201
-    finally: connection.close()
-
-
+ data=request.get_json(silent=True) or {};email=str(data.get("email","")).strip().lower();password=data.get("password","")
+ if not email:return jsonify({"error":"Email is required."}),400
+ if not password:return jsonify({"error":"Password is required."}),400
+ if len(password)<8:return jsonify({"error":"Password must be at least 8 characters."}),400
+ db=sqlalchemy_session()
+ try:
+  user=User(email=email,password_hash=generate_password_hash(password));db.add(user);db.commit();session.clear();session["user_id"]=user.id;return jsonify({"user":user_response(user)}),201
+ except IntegrityError:db.rollback();return jsonify({"error":"An account with this email already exists."}),409
 @auth_bp.post("/api/auth/login")
-@rate_limit("RATE_LIMIT_LOGIN_PER_MINUTE", 10)
+@rate_limit("RATE_LIMIT_LOGIN_PER_MINUTE",10)
 def login():
-    data = request.get_json(silent=True) or {}
-    email = str(data.get("email", "")).strip().lower()
-    password = data.get("password", "")
-    if not email or not password: return jsonify({"error": "Email and password are required."}), 400
-    connection = get_db()
-    try:
-        user = connection.execute("SELECT id, email, password_hash FROM users WHERE email = ?", (email,)).fetchone()
-        if not user or not check_password_hash(user["password_hash"], password):
-            return jsonify({"error": "Invalid email or password."}), 401
-        session.clear()
-        session["user_id"] = user["id"]
-        return jsonify({"user": user_response(user)})
-    finally: connection.close()
-
-
+ data=request.get_json(silent=True) or {};email=str(data.get("email","")).strip().lower();password=data.get("password","")
+ if not email or not password:return jsonify({"error":"Email and password are required."}),400
+ user=sqlalchemy_session().scalar(select(User).where(User.email==email))
+ if not user or not check_password_hash(user.password_hash,password):return jsonify({"error":"Invalid email or password."}),401
+ session.clear();session["user_id"]=user.id;return jsonify({"user":user_response(user)})
 @auth_bp.post("/api/auth/logout")
-def logout():
-    session.clear()
-    return jsonify({"status": "ok"})
-
-
+def logout():session.clear();return jsonify({"status":"ok"})
 @auth_bp.get("/api/auth/me")
 def current_user():
-    user_id = session.get("user_id")
-    if not user_id: return jsonify({"user": None})
-    connection = get_db()
-    try:
-        user = connection.execute("SELECT id, email FROM users WHERE id = ?", (user_id,)).fetchone()
-        if not user:
-            session.clear()
-            return jsonify({"user": None})
-        return jsonify({"user": user_response(user)})
-    finally: connection.close()
+ user_id=session.get("user_id")
+ if not user_id:return jsonify({"user":None})
+ user=sqlalchemy_session().get(User,user_id)
+ if not user:session.clear();return jsonify({"user":None})
+ return jsonify({"user":user_response(user)})

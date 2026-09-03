@@ -1,89 +1,46 @@
-import sqlite3
-
-from flask import Blueprint, g, jsonify, request
-
-from database import get_db
+from flask import Blueprint,g,jsonify,request
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
+from database import sqlalchemy_session
+from models import Creator,Project
 from helpers.auth import require_login
-
-projects_bp = Blueprint("projects", __name__)
-
-
-def owned_creator(connection):
-    return connection.execute("SELECT id FROM creators WHERE user_id = ?", (g.user_id,)).fetchone()
-
-
-def valid_project(data):
-    title = str(data.get("title", "")).strip()
-    url = str(data.get("url", "")).strip()
-    if not title or not url or not url.lower().startswith(("http://", "https://")):
-        return None
-    return title, str(data.get("description", "")).strip(), str(data.get("type", "")).strip(), url
-
-
-def own_project(connection, project_id):
-    return connection.execute("SELECT projects.* FROM projects JOIN creators ON creators.id = projects.creator_id WHERE projects.id = ? AND creators.user_id = ?", (project_id, g.user_id)).fetchone()
-
-
+projects_bp=Blueprint("projects",__name__)
+def owned_creator(db):return db.scalar(select(Creator).where(Creator.user_id==g.user_id))
+def serialize(p):return {"id":p.id,"title":p.title,"description":p.description,"type":p.type,"url":p.url,"created_at":p.created_at.isoformat() if p.created_at else None,"updated_at":p.updated_at.isoformat() if p.updated_at else None}
+def valid(data):
+ title=str(data.get("title","")).strip();url=str(data.get("url","")).strip()
+ return (title,str(data.get("description","")).strip(),str(data.get("type","")).strip(),url) if title and url.lower().startswith(("http://","https://")) else None
+def own(db,pid):return db.scalar(select(Project).join(Creator,Project.creator_id==Creator.id).where(Project.id==pid,Creator.user_id==g.user_id))
 @projects_bp.get("/api/creator/projects")
 @require_login
 def list_projects():
-    connection = get_db()
-    try:
-        creator = owned_creator(connection)
-        rows = connection.execute("SELECT id, title, description, type, url, created_at, updated_at FROM projects WHERE creator_id = ? ORDER BY created_at DESC", (creator["id"],)).fetchall() if creator else []
-        return jsonify({"projects": [dict(row) for row in rows]})
-    finally: connection.close()
-
-
+ db=sqlalchemy_session();c=owned_creator(db);items=[] if not c else list(db.scalars(select(Project).where(Project.creator_id==c.id).order_by(Project.created_at.desc())))
+ return jsonify({"projects":[serialize(p) for p in items]})
 @projects_bp.post("/api/creator/projects")
 @require_login
 def create_project():
-    data = request.get_json(silent=True) or {}
-    values = valid_project(data)
-    if not values: return jsonify({"error": "title and a valid http(s) url are required."}), 400
-    connection = get_db()
-    try:
-        creator = owned_creator(connection)
-        if not creator: return jsonify({"error": "Create a creator profile first."}), 400
-        cursor = connection.execute("INSERT INTO projects (creator_id, title, description, type, url) VALUES (?, ?, ?, ?, ?)", (creator["id"], *values))
-        connection.commit()
-        row = connection.execute("SELECT id, title, description, type, url, created_at, updated_at FROM projects WHERE id = ?", (cursor.lastrowid,)).fetchone()
-        return jsonify({"project": dict(row)}), 201
-    except sqlite3.IntegrityError: return jsonify({"error": "Could not create project."}), 409
-    finally: connection.close()
-
-
+ values=valid(request.get_json(silent=True) or {})
+ if not values:return jsonify({"error":"title and a valid http(s) url are required."}),400
+ db=sqlalchemy_session();c=owned_creator(db)
+ if not c:return jsonify({"error":"Create a creator profile first."}),400
+ try:
+  p=Project(creator_id=c.id,title=values[0],description=values[1],type=values[2],url=values[3]);db.add(p);db.commit();return jsonify({"project":serialize(p)}),201
+ except IntegrityError:db.rollback();return jsonify({"error":"Could not create project."}),409
 @projects_bp.patch("/api/creator/projects/<int:project_id>")
 @projects_bp.put("/api/creator/projects/<int:project_id>")
 @require_login
 def update_project(project_id):
-    data = request.get_json(silent=True) or {}
-    connection = get_db()
-    try:
-        project = own_project(connection, project_id)
-        if not project: return jsonify({"error": "Project not found."}), 404
-        updates = {field: data[field] for field in ("title", "description", "type", "url") if field in data}
-        if "title" in updates: updates["title"] = str(updates["title"]).strip()
-        if "url" in updates:
-            updates["url"] = str(updates["url"]).strip()
-            if not updates["url"].lower().startswith(("http://", "https://")): return jsonify({"error": "Invalid project URL."}), 400
-        if not updates: return jsonify({"error": "No editable fields provided."}), 400
-        assignments = ", ".join(f"{field} = ?" for field in updates) + ", updated_at = CURRENT_TIMESTAMP"
-        connection.execute(f"UPDATE projects SET {assignments} WHERE id = ?", [*updates.values(), project_id])
-        connection.commit()
-        updated = connection.execute("SELECT id, title, description, type, url, created_at, updated_at FROM projects WHERE id = ?", (project_id,)).fetchone()
-        return jsonify({"project": dict(updated)})
-    finally: connection.close()
-
-
+ data=request.get_json(silent=True) or {};db=sqlalchemy_session();p=own(db,project_id)
+ if not p:return jsonify({"error":"Project not found."}),404
+ fields={k:data[k] for k in ("title","description","type","url") if k in data}
+ if not fields:return jsonify({"error":"No editable fields provided."}),400
+ if "title" in fields:fields["title"]=str(fields["title"]).strip()
+ if "url" in fields and not str(fields["url"]).strip().lower().startswith(("http://","https://")):return jsonify({"error":"Invalid project URL."}),400
+ for k,v in fields.items():setattr(p,k,v.strip() if isinstance(v,str) else v)
+ db.commit();return jsonify({"project":serialize(p)})
 @projects_bp.delete("/api/creator/projects/<int:project_id>")
 @require_login
 def delete_project(project_id):
-    connection = get_db()
-    try:
-        project = own_project(connection, project_id)
-        if not project: return jsonify({"error": "Project not found."}), 404
-        connection.execute("DELETE FROM projects WHERE id = ?", (project_id,))
-        connection.commit()
-        return jsonify({"status": "ok"})
-    finally: connection.close()
+ db=sqlalchemy_session();p=own(db,project_id)
+ if not p:return jsonify({"error":"Project not found."}),404
+ db.delete(p);db.commit();return jsonify({"status":"ok"})
