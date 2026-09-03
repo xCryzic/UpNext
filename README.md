@@ -77,7 +77,7 @@ alembic upgrade head
 
 ### Vercel + Neon
 
-On Vercel, Vite builds the static `dist/` output and Vercel's CDN serves it. The catch-all Python Function at `api/[...path].py` imports the existing Flask application and handles `/api/*`; it does not serve frontend files and does not run Gunicorn. The SPA rewrite is evaluated after filesystem routes, so direct visits to client-side routes return `index.html` while `/api/*` continues to reach Flask.
+On Vercel, Vite builds the static `dist/` output and Vercel's CDN serves it. The Python Function at `api/index.py` imports the existing Flask application and handles `/api/*` through an explicit rewrite; it does not serve frontend files and does not run Gunicorn. The API rewrite is evaluated before the SPA fallback, so a request such as `/api/health` reaches Flask as `/api/health`, while direct visits to client-side routes return `index.html`.
 
 Set the Vercel environment variables below for the Production environment, then run Alembic manually against Neon whenever schema changes are introduced. Do not run migrations from a Vercel Function invocation:
 

@@ -4,12 +4,16 @@
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
   "functions": {
-    "api/[...path].py": {
+    "api/index.py": {
       "includeFiles": "backend/**",
       "excludeFiles": "{backend/tests/**,backend/data/**,data/**,docs/**,db/**}"
     }
   },
   "rewrites": [
+    {
+      "source": "/api/:path*",
+      "destination": "/api/index.py"
+    },
     {
       "source": "/(.*)",
       "destination": "/index.html"
