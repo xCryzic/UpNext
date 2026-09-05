@@ -1,6 +1,6 @@
 """SQLAlchemy 2.x schema for UpNext."""
 from datetime import datetime, timezone
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 def utcnow(): return datetime.now(timezone.utc)
@@ -9,6 +9,7 @@ class User(Base):
     __tablename__="users"; id:Mapped[int]=mapped_column(primary_key=True); email:Mapped[str]=mapped_column(String(255),unique=True,index=True); password_hash:Mapped[str]=mapped_column(String(512)); created_at:Mapped[datetime]=mapped_column(DateTime(timezone=True),default=utcnow)
 class Creator(Base):
     __tablename__="creators"; id:Mapped[int]=mapped_column(primary_key=True); user_id:Mapped[int]=mapped_column(ForeignKey("users.id",ondelete="CASCADE"),unique=True); display_name:Mapped[str]=mapped_column(String(255)); username:Mapped[str]=mapped_column(String(64),unique=True,index=True); bio:Mapped[str]=mapped_column(Text,default=""); avatar:Mapped[str]=mapped_column(Text,default=""); location:Mapped[str|None]=mapped_column(String(255)); website:Mapped[str|None]=mapped_column(Text); is_public:Mapped[bool]=mapped_column(Boolean,default=True); created_at:Mapped[datetime]=mapped_column(DateTime(timezone=True),default=utcnow); updated_at:Mapped[datetime]=mapped_column(DateTime(timezone=True),default=utcnow,onupdate=utcnow)
+    __table_args__=(Index("uq_creators_username_lower",func.lower(username),unique=True),)
 class CreatorCategory(Base):
     __tablename__="creator_categories"; creator_id:Mapped[int]=mapped_column(ForeignKey("creators.id",ondelete="CASCADE"),primary_key=True); category:Mapped[str]=mapped_column(String(100),primary_key=True)
 class CreatorSkill(Base):

@@ -1,6 +1,6 @@
 import re
 from flask import Blueprint,g,jsonify,request
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from database import sqlalchemy_session
 from models import Creator,CreatorCategory,CreatorSkill,CreatorLookingFor,Project,SocialAccount
@@ -45,10 +45,11 @@ def create_creator():
  invalid=[x for x in cats if x not in CATEGORIES]
  if invalid:return jsonify({"error":"Unsupported category.","invalid":invalid}),400
  db=sqlalchemy_session()
+ if db.scalar(select(Creator.id).where(func.lower(Creator.username)==u)) is not None:return jsonify({"error":"That username is already taken."}),409
  if mine(db):return jsonify({"error":"You already have a creator profile."}),409
  try:
   c=Creator(user_id=g.user_id,display_name=name,username=u,bio=str(d.get("bio","")).strip(),avatar=str(d.get("avatar","")).strip(),location=d.get("location"),website=d.get("website"));db.add(c);db.flush();save_rel(db,c.id,cats,skills,looking);db.commit();return jsonify({"creator":serialize_creator(db,c,True)}),201
- except IntegrityError:db.rollback();return jsonify({"error":"That username is already in use."}),409
+ except IntegrityError:db.rollback();return jsonify({"error":"That username is already taken."}),409
 @creators_bp.patch("/api/creator")
 @creators_bp.put("/api/creator")
 @require_login
@@ -59,6 +60,7 @@ def update_creator():
   if "username" in d:
    u=str(d["username"]).strip().lower()
    if not validate_username(u):return jsonify({"error":"Invalid username."}),400
+   if db.scalar(select(Creator.id).where(func.lower(Creator.username)==u,Creator.id!=c.id)) is not None:return jsonify({"error":"That username is already taken."}),409
    c.username=u
   for f in ("display_name","bio","avatar","location","website"):
    if f in d:setattr(c,f,d[f])
@@ -72,7 +74,7 @@ def update_creator():
    save_rel(db,c.id,*vals)
   db.commit();return jsonify({"creator":serialize_creator(db,c,True)})
  except ValueError:return jsonify({"error":"categories, skills, and looking_for must be lists."}),400
- except IntegrityError:db.rollback();return jsonify({"error":"That username is already in use."}),409
+ except IntegrityError:db.rollback();return jsonify({"error":"That username is already taken."}),409
 @creators_bp.delete("/api/creator")
 @require_login
 def delete_creator():

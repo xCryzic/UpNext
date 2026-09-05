@@ -86,6 +86,25 @@ class BackendTestCase(unittest.TestCase):
         self.signup("second@example.com")
         self.assertEqual(self.create_profile("maker").status_code, 409)
 
+    def test_usernames_are_case_insensitively_unique_at_signup_and_profile_edit(self):
+        first = self.client.post("/api/auth/signup", json={"email": "first@example.com", "password": "correct-horse", "display_name": "First", "username": "Cryzic"})
+        self.assertEqual(first.status_code, 201)
+        self.assertEqual(self.client.get("/api/creator/me").json["creator"]["username"], "cryzic")
+        self.assertEqual(self.client.patch("/api/creator", json={"username": "CRYZIC"}).status_code, 200)
+
+        self.client.post("/api/auth/logout")
+        duplicate = self.client.post("/api/auth/signup", json={"email": "second@example.com", "password": "correct-horse", "display_name": "Second", "username": "cRyZiC"})
+        self.assertEqual(duplicate.status_code, 409)
+        self.assertEqual(duplicate.json["error"], "That username is already taken.")
+
+        second = self.client.post("/api/auth/signup", json={"email": "second@example.com", "password": "correct-horse", "display_name": "Second", "username": "SecondCreator"})
+        self.assertEqual(second.status_code, 201)
+        self.client.post("/api/auth/logout")
+        self.assertEqual(self.client.post("/api/auth/login", json={"email": "first@example.com", "password": "correct-horse"}).status_code, 200)
+        rejected = self.client.patch("/api/creator", json={"username": "SECONDCREATOR"})
+        self.assertEqual(rejected.status_code, 409)
+        self.assertEqual(rejected.json["error"], "That username is already taken.")
+
     def test_publishability_requires_project_and_social(self):
         self.signup()
         self.create_profile()
