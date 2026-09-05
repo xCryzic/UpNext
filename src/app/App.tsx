@@ -6,10 +6,12 @@ import { reportReasons, submitReport } from "../services/reports/reportApi";
 import { API_URL } from "../services/api/apiClient";
 import { deleteAccount, updateProfileVisibility } from "../services/account/accountApi";
 import { listReports, updateAdminCreatorVisibility, updateReportStatus, type ModerationReport } from "../services/admin/adminApi";
+import authLogo from "../../assets/logo1.png";
 
 const icons: Record<string, string> = { Artist: "🎨", Musician: "🎵", Developer: "💻", "Game Developer": "🎮", "Video Creator": "🎬", Writer: "✍️", Photographer: "📷", Designer: "✦", "3D Artist": "◒", Other: "✦" };
 type AuthMode = "login" | "signup";
-type View = "discover" | "profile" | "onboarding" | "settings" | "admin" | "privacy" | "terms" | "guidelines" | "notfound";
+type ProfileStarter = Pick<CreatorInput, "displayName" | "username">;
+type View = "home" | "discover" | "profile" | "onboarding" | "settings" | "admin" | "privacy" | "terms" | "guidelines" | "notfound";
 const initials = (name: string) => name.split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase() || "U";
 const isOwnershipVerified = (social: SocialAccount) => (social.platform === "GitHub" || social.platform === "Spotify") && social.ownershipVerified && social.verificationStatus === "verified";
 const verifiedAccountLabel = (count: number) => `${count} linked account${count === 1 ? "" : "s"} ownership verified by UpNext`;
@@ -30,6 +32,44 @@ function PublicAuthLanding({ onAuth }: { onAuth: (mode: AuthMode) => void }) {
   return <main className="public-landing"><section className="public-landing-card"><span className="auth-mark">upnext<span>.</span></span><p className="eyebrow">EMERGING CREATOR DISCOVERY</p><h1>Discover emerging creators <em>before everyone else does.</em></h1><p className="public-landing-copy">UpNext is a work-first place to find artists, developers, writers, and builders while their work is still taking shape.</p><div className="public-landing-actions"><button className="secondary" onClick={() => onAuth("login")}>Log in</button><button className="join" onClick={() => onAuth("signup")}>Sign up <span>→</span></button></div><p className="public-landing-note">No feeds. No follower-chasing. Just thoughtful work.</p></section></main>;
 }
 
+function PublicAuthExperience({ mode, onChangeMode, onSuccess }: { mode: AuthMode; onChangeMode: (mode: AuthMode) => void; onSuccess: (user: AuthUser, starter?: ProfileStarter) => void }) {
+  const [email, setEmail] = useState(""); const [password, setPassword] = useState(""); const [displayName, setDisplayName] = useState(""); const [username, setUsername] = useState(""); const [error, setError] = useState(""); const [loading, setLoading] = useState(false);
+  const isLogin = mode === "login";
+  useEffect(() => setError(""), [mode]);
+  async function submit(event: React.FormEvent) {
+    event.preventDefault(); setError(""); setLoading(true);
+    try {
+      const user = isLogin ? await authProvider.signIn(email, password) : await authProvider.signUp(email, password);
+      onSuccess(user, isLogin ? undefined : { displayName: displayName.trim(), username: username.trim().toLowerCase() });
+    } catch (err) { setError(err instanceof Error ? err.message : "Please try again."); } finally { setLoading(false); }
+  }
+  return <main className="public-auth">
+    <section className="public-auth-left">
+      <section className="public-auth-intro" aria-label="UpNext"><p className="public-auth-kicker">A work-in-progress directory for emerging creators</p><p className="public-auth-note">Make a place for your work before the crowd arrives.</p></section>
+      <section className="public-auth-form-wrap" aria-labelledby="public-auth-title">
+      <div className="public-auth-form-heading"><p className="public-auth-eyebrow">{isLogin ? "WELCOME BACK" : "JOIN THE DIRECTORY"}</p><h1 id="public-auth-title">{isLogin ? "Pick up where your work left off." : "Put your work on the map."}</h1><p>{isLogin ? "Log in to shape your profile and keep your links current." : "Start with the basics. You can finish shaping your public profile inside UpNext."}</p></div>
+      <form className="public-auth-form" onSubmit={submit} key={mode}>
+        {!isLogin && <div className="public-auth-name-row"><label><span>Display name</span><input required autoComplete="name" value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="How should people know you?" /></label><label><span>Username</span><input required pattern="[a-z0-9][a-z0-9_.-]{1,28}[a-z0-9]" autoCapitalize="none" autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value.toLowerCase())} placeholder="your-handle" /><small>3–30 lowercase characters</small></label></div>}
+        <label><span>Email</span><input type="email" required autoFocus autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@example.com" /></label>
+        <label><span>Password</span><input type="password" required minLength={isLogin ? undefined : 8} autoComplete={isLogin ? "current-password" : "new-password"} value={password} onChange={(event) => setPassword(event.target.value)} placeholder={isLogin ? "Your password" : "At least 8 characters"} /></label>
+        {error && <div className="public-auth-error" role="alert">{error}</div>}
+        <button className="public-auth-submit" disabled={loading}>{loading ? "Working…" : isLogin ? "Log in" : "Create your account"}<span aria-hidden="true">↗</span></button>
+      </form>
+      <p className="public-auth-switch">{isLogin ? "New here?" : "Already have an account?"} <button type="button" onClick={() => onChangeMode(isLogin ? "signup" : "login")}>{isLogin ? "Sign up" : "Log in"}</button></p>
+      {!isLogin && <p className="public-auth-profile-note">Your display name and username will be ready in your profile setup after you join.</p>}
+      </section>
+    </section>
+    <aside className="public-auth-art" aria-hidden="true">
+      <div className="public-auth-paper" />
+      <div className="public-auth-arc public-auth-arc-top" />
+      <div className="public-auth-arc public-auth-arc-bottom" />
+      <div className="public-auth-dotfield" />
+      <div className="public-auth-scribble" />
+      <div className="public-auth-brand"><img src={authLogo} alt="" /><span className="brand-cut brand-cut-one" /><span className="brand-cut brand-cut-two" /><span className="brand-arrow">↗</span></div>
+    </aside>
+  </main>;
+}
+
 function ReportModal({ creator, onClose }: { creator: Creator; onClose: () => void }) {
   const [reason, setReason] = useState(""); const [details, setDetails] = useState(""); const [message, setMessage] = useState(""); const [loading, setLoading] = useState(false);
   async function submit(event: React.FormEvent) { event.preventDefault(); setLoading(true); try { await submitReport(creator.id, reason, details); setMessage("Thanks. Your report has been received."); } catch (err) { setMessage(err instanceof Error ? err.message : "Could not submit the report."); } finally { setLoading(false); } }
@@ -39,6 +79,31 @@ function ReportModal({ creator, onClose }: { creator: Creator; onClose: () => vo
 function Profile({ creator, onBack, onReport }: { creator: Creator; onBack: () => void; onReport: () => void }) {
   const primary = creator.website || creator.socialAccounts[0]?.profileUrl;
   return <main className="profile-wrap"><button className="back" onClick={onBack}>← Back to discovery</button><section className="profile-hero"><div className="avatar large">{creator.avatar || initials(creator.displayName)}</div><div><h1>{creator.displayName}</h1><p className="handle">@{creator.username}{creator.location && ` · ${creator.location}`}</p><p className="profile-bio">{creator.bio}</p><div className="chips">{creator.categories.map((category) => <span key={category}>{icons[category]} {category}</span>)}</div>{primary && <a className="primary-link" target="_blank" rel="noreferrer" href={primary}>Visit portfolio ↗</a>}</div></section><section className="profile-grid"><div><h2>Selected work</h2>{creator.projects.map((project) => <a className="project" key={project.id} href={project.url} target="_blank" rel="noreferrer"><span>{project.type}</span><h3>{project.title} ↗</h3><p>{project.description}</p></a>)}</div><aside>{creator.skills.length > 0 && <><h2>Skills</h2><div className="chips">{creator.skills.map((skill) => <span key={skill}>{skill}</span>)}</div></>}<h2>Looking for</h2><div className="chips">{creator.lookingFor.map((value) => <span key={value}>{value}</span>)}</div><h2>Find them</h2><div className="social-list">{creator.socialAccounts.map((social) => <a key={social.id} href={social.profileUrl} target="_blank" rel="noreferrer">{social.platform}: @{social.username}{isOwnershipVerified(social) && <small className="ownership-verified">✓ Ownership verified</small>} ↗</a>)}</div>{creator.verifiedSocialCount > 0 && <p className="public-verification-summary" title={verifiedAccountLabel(creator.verifiedSocialCount)}>✓ {creator.verifiedSocialCount} linked account{creator.verifiedSocialCount === 1 ? "" : "s"} verified</p>}<p className="verification-note">Ownership verification confirms control of a linked account, not identity, safety, or follower count.</p><button className="report" onClick={onReport}>Report this profile</button></aside></section></main>;
+}
+
+function CreatorCard({ creator, onOpen }: { creator: Creator; onOpen: (creator: Creator) => void }) {
+  const primaryLink = creator.website || creator.socialAccounts[0]?.profileUrl;
+  const platforms = creator.socialAccounts.slice(0, 2).map((social) => social.platform);
+  const extraPlatforms = creator.socialAccounts.length - platforms.length;
+
+  return <article className="creator-card">
+    <button className="card-hit" onClick={() => onOpen(creator)} aria-label={`View ${creator.displayName}`} />
+    <div className="avatar">{creator.avatar || initials(creator.displayName)}</div>
+    <div className="card-body">
+      <div className="card-top"><div><h3>{creator.displayName}</h3><p>@{creator.username}</p></div></div>
+      <div className="chips">{creator.categories.map((value) => <span key={value}>{icons[value]} {value}</span>)}</div>
+      <p className="bio">{creator.bio}</p>
+      <div className="card-meta">
+        <span>{platforms.length ? `${platforms.join(" · ")}${extraPlatforms > 0 ? ` +${extraPlatforms}` : ""}` : "Portfolio"}</span>
+        {creator.verifiedSocialCount > 0 && <small className="card-verification" title={verifiedAccountLabel(creator.verifiedSocialCount)}>✓ {creator.verifiedSocialCount} verified account{creator.verifiedSocialCount === 1 ? "" : "s"}</small>}
+      </div>
+      {primaryLink && <div className="card-action"><a href={primaryLink} onClick={(event) => event.stopPropagation()} target="_blank" rel="noreferrer">Visit work ↗</a></div>}
+    </div>
+  </article>;
+}
+
+function CreatorGridSkeleton({ count = 3 }: { count?: number }) {
+  return <div className="creator-grid" aria-label="Loading creators">{Array.from({ length: count }, (_, index) => <div className="creator-card-skeleton" key={index} aria-hidden="true"><span /><div><i /><i /><i /></div></div>)}</div>;
 }
 
 function TagChoices({ values, options, onChange, freeText = false }: { values: string[]; options?: readonly string[]; onChange: (values: string[]) => void; freeText?: boolean }) {
@@ -61,9 +126,9 @@ function SocialList({ socials, onChange, onStatus }: { socials: SocialAccount[];
   return <><div className="item-list">{socials.map((social) => { const provider = verificationProvider(social); const verified = isOwnershipVerified(social); return <div className="managed-social" key={social.id}><div><strong>{social.platform}</strong><a href={social.profileUrl} target="_blank" rel="noreferrer">{social.profileUrl}</a><small className={verified ? "ownership-verified" : "ownership-linked"}>{verified ? "✓ Ownership verified" : "Linked"}</small></div><span>{provider && !verified && <button className={`verify-${provider}`} type="button" onClick={() => { window.location.assign(`${API_URL}/api/creator/socials/${social.id}/verify/${provider}`); }}>Verify ownership</button>}<button type="button" onClick={() => setEditing({ ...social })}>Edit</button><button type="button" onClick={() => remove(social.id)} disabled={saving}>Remove</button></span></div>; })}</div><VerificationSummary socials={socials} />{editing && <div className="edit-panel"><h3>Edit account</h3><label>Platform<select value={editing.platform} onChange={(event) => setEditing({ ...editing, platform: event.target.value })}>{socialPlatforms.map((platform) => <option key={platform}>{platform}</option>)}</select></label><label>Username<input value={editing.username} onChange={(event) => setEditing({ ...editing, username: event.target.value })} /></label><label>Profile URL<input value={editing.profileUrl} onChange={(event) => setEditing({ ...editing, profileUrl: event.target.value })} /></label><div><button className="secondary" type="button" onClick={() => setEditing(null)}>Cancel</button><button className="secondary" type="button" disabled={saving} onClick={save}>{saving ? "Saving…" : "Save changes"}</button></div></div>}{error && <div className="auth-error">{error}</div>}</>;
 }
 
-function Onboarding({ existing, onDone, onCancel }: { existing: Creator | null; onDone: () => void; onCancel: () => void }) {
+function Onboarding({ existing, starter, onDone, onCancel }: { existing: Creator | null; starter: ProfileStarter | null; onDone: () => void; onCancel: () => void }) {
   const [step, setStep] = useState(0); const [error, setError] = useState(""); const [saving, setSaving] = useState(false); const [creatorExists, setCreatorExists] = useState(Boolean(existing));
-  const [form, setForm] = useState<CreatorInput>({ displayName: existing?.displayName || "", username: existing?.username || "", bio: existing?.bio || "", avatar: existing?.avatar || "", location: existing?.location || "", website: existing?.website || "", categories: existing?.categories || [], skills: existing?.skills || [], lookingFor: existing?.lookingFor || [] });
+  const [form, setForm] = useState<CreatorInput>({ displayName: existing?.displayName || starter?.displayName || "", username: existing?.username || starter?.username || "", bio: existing?.bio || "", avatar: existing?.avatar || "", location: existing?.location || "", website: existing?.website || "", categories: existing?.categories || [], skills: existing?.skills || [], lookingFor: existing?.lookingFor || [] });
   const [projects, setProjects] = useState<Project[]>(existing?.projects || []); const [socials, setSocials] = useState<SocialAccount[]>(existing?.socialAccounts || []); const [status, setStatus] = useState(existing?.publishability); const [project, setProject] = useState({ title: "", description: "", type: "", url: "" }); const [social, setSocial] = useState({ platform: "", username: "", profileUrl: "" });
   const titles = ["About you", "What you create", "Skills", "Looking for", "Projects", "Social accounts", "Review"];
   const patch = (value: Partial<CreatorInput>) => setForm((current) => ({ ...current, ...value }));
@@ -99,12 +164,44 @@ function Moderation({ onBack }: { onBack: () => void }) {
   return <main className="settings-wrap"><button className="back" onClick={onBack}>← Back to discovery</button><p className="eyebrow">MODERATION</p><h1>Reports</h1>{error && <p className="auth-error" role="alert">{error}</p>}{loading ? <p className="empty">Loading reports…</p> : reports.length ? <div className="moderation-list">{reports.map((report) => <section key={report.id} className="settings-section"><p><strong>@{report.username}</strong> · {report.reason.replaceAll("_", " ")} · {report.status}</p>{report.details && <p>{report.details}</p>}<p className="settings-note">Reported by {report.reporter_email} · {report.created_at}</p><div className="moderation-actions"><button className="secondary" onClick={() => setStatus(report, "dismissed")}>Dismiss</button><button className="secondary" onClick={() => setStatus(report, "actioned")}>Mark actioned</button><button className="report" onClick={() => hideCreator(report)}>Hide profile</button></div></section>)}</div> : <p className="empty">No reports to review.</p>}</main>;
 }
 
-function viewFromPath(): View { const path = window.location.pathname.replace(/\/$/, "") || "/"; return path === "/" ? "discover" : path === "/admin" ? "admin" : path === "/privacy" ? "privacy" : path === "/terms" ? "terms" : path === "/community-guidelines" ? "guidelines" : "notfound"; }
+type RouteState = { view: View; profileUsername: string | null };
+
+function routeFromPath(): RouteState {
+  const path = window.location.pathname.replace(/\/$/, "") || "/";
+  const profile = path.match(/^\/profile\/([^/]+)$/);
+  if (path === "/") return { view: "home", profileUsername: null };
+  if (path === "/discover") return { view: "discover", profileUsername: null };
+  if (profile) return { view: "profile", profileUsername: decodeURIComponent(profile[1]) };
+  if (path === "/admin") return { view: "admin", profileUsername: null };
+  if (path === "/privacy") return { view: "privacy", profileUsername: null };
+  if (path === "/terms") return { view: "terms", profileUsername: null };
+  if (path === "/community-guidelines") return { view: "guidelines", profileUsername: null };
+  return { view: "notfound", profileUsername: null };
+}
 
 export function App() {
-  const [user, setUser] = useState<AuthUser | null>(null); const [ready, setReady] = useState(false); const [auth, setAuth] = useState<AuthMode | null>(null); const [view, setView] = useState<View>(viewFromPath); const [creators, setCreators] = useState<Creator[]>([]); const [total, setTotal] = useState(0); const [selected, setSelected] = useState<Creator | null>(null); const [mine, setMine] = useState<Creator | null>(null); const [search, setSearch] = useState(""); const [category, setCategory] = useState(""); const [sort, setSort] = useState("discover"); const [loading, setLoading] = useState(true); const [error, setError] = useState(""); const [reporting, setReporting] = useState(false); const [pendingReport, setPendingReport] = useState<Creator | null>(null);
-  async function refreshDiscovery() { setLoading(true); setError(""); try { const result = await listCreators({ search, category, sort }); setCreators(result.creators); setTotal(result.total); } catch (err) { setError(err instanceof Error ? err.message : "Could not load creators."); } finally { setLoading(false); } }
+  const initialRoute = routeFromPath();
+  const [user, setUser] = useState<AuthUser | null>(null); const [ready, setReady] = useState(false); const [auth, setAuth] = useState<AuthMode | null>(null); const [view, setView] = useState<View>(initialRoute.view); const [profileUsername, setProfileUsername] = useState<string | null>(initialRoute.profileUsername); const [creators, setCreators] = useState<Creator[]>([]); const [total, setTotal] = useState(0); const [selected, setSelected] = useState<Creator | null>(null); const [mine, setMine] = useState<Creator | null>(null); const [profileStarter, setProfileStarter] = useState<ProfileStarter | null>(null); const [search, setSearch] = useState(""); const [category, setCategory] = useState(""); const [sort, setSort] = useState("discover"); const [loading, setLoading] = useState(false); const [profileLoading, setProfileLoading] = useState(false); const [error, setError] = useState(""); const [profileError, setProfileError] = useState(""); const [reloadToken, setReloadToken] = useState(0); const [reporting, setReporting] = useState(false); const [pendingReport, setPendingReport] = useState<Creator | null>(null);
+  const refreshDiscovery = () => setReloadToken((current) => current + 1);
+  const navigate = (path: string, nextView: View, username: string | null = null) => { if (window.location.pathname !== path) window.history.pushState({}, "", path); setSelected(null); setProfileUsername(username); setView(nextView); };
+  const goHome = () => navigate("/", "home");
+  const goDiscover = () => navigate("/discover", "discover");
   useEffect(() => { authProvider.currentUser().then(setUser).catch(() => setUser(null)).finally(() => setReady(true)); }, []);
+  useEffect(() => { const onPopState = () => { const route = routeFromPath(); setSelected(null); setProfileUsername(route.profileUsername); setView(route.view); }; window.addEventListener("popstate", onPopState); return () => window.removeEventListener("popstate", onPopState); }, []);
+  useEffect(() => {
+    const onInternalLink = (event: MouseEvent) => {
+      if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      const link = (event.target as Element | null)?.closest<HTMLAnchorElement>("a[href]");
+      if (!link || link.target || link.hasAttribute("download")) return;
+      const target = new URL(link.href, window.location.origin);
+      if (target.origin !== window.location.origin || !["/privacy", "/terms", "/community-guidelines"].includes(target.pathname)) return;
+      event.preventDefault();
+      window.history.pushState({}, "", target.pathname);
+      const route = routeFromPath(); setSelected(null); setProfileUsername(route.profileUsername); setView(route.view);
+    };
+    document.addEventListener("click", onInternalLink);
+    return () => document.removeEventListener("click", onInternalLink);
+  }, []);
   useEffect(() => {
     const query = new URLSearchParams(window.location.search);
     const spotifyResult = query.get("spotify_verification");
@@ -114,29 +211,49 @@ export function App() {
     const message = result === "success" ? `${provider} account verified.` : result === "denied" ? `${provider} verification was cancelled.` : `${provider} verification could not be completed.`;
     const notice = document.createElement("div"); notice.className = "oauth-notice"; notice.textContent = message; document.body.appendChild(notice);
     window.history.replaceState({}, "", `${window.location.pathname}${window.location.hash}`);
-    if (result === "success") {
-      getMyCreator().then((creator) => { setMine(creator); setView("onboarding"); }).catch(() => setError("GitHub was verified, but your profile could not be refreshed."));
-    }
+    if (result === "success") getMyCreator().then((creator) => { setMine(creator); setView("onboarding"); }).catch(() => setError("Your account was verified, but your profile could not be refreshed."));
     const timer = window.setTimeout(() => notice.remove(), 5000);
     return () => { window.clearTimeout(timer); notice.remove(); };
   }, []);
-  useEffect(() => { const timer = setTimeout(() => { void refreshDiscovery(); }, 180); return () => clearTimeout(timer); }, [search, category, sort]);
+  const activeSearch = view === "discover" ? search : "";
+  const activeCategory = view === "discover" ? category : "";
+  const activeSort = view === "discover" ? sort : "discover";
+  useEffect(() => {
+    if (!user || (view !== "home" && view !== "discover")) return;
+    let active = true;
+    const timer = window.setTimeout(async () => {
+      setLoading(true); setError("");
+      try {
+        const result = await listCreators({ search: activeSearch, category: activeCategory, sort: activeSort, limit: view === "home" ? 3 : 48 });
+        if (active) { setCreators(result.creators); setTotal(result.total); }
+      } catch (err) { if (active) setError(err instanceof Error ? err.message : "Could not load creators."); } finally { if (active) setLoading(false); }
+    }, view === "discover" ? 180 : 0);
+    return () => { active = false; window.clearTimeout(timer); };
+  }, [user, view, activeSearch, activeCategory, activeSort, reloadToken]);
+  useEffect(() => {
+    if (!user || view !== "profile" || !profileUsername) return;
+    let active = true;
+    setProfileLoading(true); setProfileError("");
+    getCreator(profileUsername).then((creator) => { if (active) setSelected(creator); }).catch((err) => { if (active) setProfileError(err instanceof Error ? err.message : "Could not open this creator profile."); }).finally(() => { if (active) setProfileLoading(false); });
+    return () => { active = false; };
+  }, [user, view, profileUsername]);
   async function beginProfile() { if (!user) { setAuth("signup"); return; } try { setMine(await getMyCreator()); setView("onboarding"); } catch (err) { setError(err instanceof Error ? err.message : "Could not load your profile."); } }
   async function openSettings() { if (!user) return; try { setMine(await getMyCreator()); setView("settings"); } catch (err) { setError(err instanceof Error ? err.message : "Could not load your account settings."); } }
-  async function openProfile(creator: Creator) { try { setSelected(await getCreator(creator.username)); setView("profile"); } catch (err) { setError(err instanceof Error ? err.message : "Could not open profile."); } }
+  function openProfile(creator: Creator) { navigate(`/profile/${encodeURIComponent(creator.username)}`, "profile", creator.username); }
   function beginReport() { if (!selected) return; if (user) { setReporting(true); return; } setPendingReport(selected); setAuth("login"); }
-  function completeAuth(authenticatedUser: AuthUser) { setUser(authenticatedUser); setAuth(null); if (pendingReport) { setReporting(true); setPendingReport(null); } }
+  function completeAuth(authenticatedUser: AuthUser, starter?: ProfileStarter) { setUser(authenticatedUser); setProfileStarter(starter || null); setAuth(null); goHome(); if (pendingReport) { setReporting(true); setPendingReport(null); } }
   const closeAuth = () => { setAuth(null); setPendingReport(null); };
-  const logout = async () => { await authProvider.signOut(); setUser(null); setMine(null); setView("discover"); };
+  const logout = async () => { await authProvider.signOut(); setUser(null); setMine(null); goHome(); };
   if (!ready) return <div className="app-loading"><span className="loading-brand">upnext<span>.</span></span></div>;
-  if (!user) return <><PublicAuthLanding onAuth={setAuth} />{auth && <AuthModal mode={auth} onClose={closeAuth} onChangeMode={setAuth} onSuccess={completeAuth} />}</>;
-  if (view === "onboarding") return <><header><button className="brand" onClick={() => setView("discover")}>upnext<span>.</span></button></header><Onboarding existing={mine} onCancel={() => setView("discover")} onDone={() => { setView("discover"); void refreshDiscovery(); }} /></>;
-  const goDiscover = () => { window.history.pushState({}, "", "/"); setSelected(null); setView("discover"); void refreshDiscovery(); };
+  if (!user) return <PublicAuthExperience mode={auth ?? "signup"} onChangeMode={setAuth} onSuccess={completeAuth} />;
+  if (view === "onboarding") return <><header><button className="brand" onClick={goHome}>upnext<span>.</span></button></header><Onboarding existing={mine} starter={profileStarter} onCancel={goHome} onDone={() => { setProfileStarter(null); goHome(); refreshDiscovery(); }} /></>;
   const shellHeader = <Header user={user} onAuth={setAuth} onDiscover={goDiscover} onProfile={beginProfile} onSettings={openSettings} onAdmin={() => setView("admin")} onLogout={logout} />;
-  if (view === "settings") return <>{shellHeader}<Settings creator={mine} onBack={() => setView("discover")} onCreatorUpdated={(creator) => { setMine(creator); void refreshDiscovery(); }} onDeleted={() => { setUser(null); setMine(null); setSelected(null); setView("discover"); void refreshDiscovery(); }} /></>;
-  if (view === "admin") return <>{shellHeader}{user?.is_admin ? <Moderation onBack={() => setView("discover")} /> : <main className="legal-wrap"><p className="eyebrow">403</p><h1>Not authorized.</h1><p>This area is limited to site administrators.</p></main>}</>;
-  if (view === "privacy" || view === "terms" || view === "guidelines") return <>{shellHeader}<LegalPage kind={view} onBack={() => { window.history.pushState({}, "", "/"); setView("discover"); }} /></>;
-  if (view === "notfound") return <>{shellHeader}<main className="legal-wrap"><p className="eyebrow">404</p><h1>Page not found.</h1><p>The page you requested does not exist.</p><button className="secondary" onClick={() => window.location.assign("/")}>Go to discovery</button></main></>;
-  if (view === "profile" && selected) return <>{shellHeader}<Profile creator={selected} onBack={() => setView("discover")} onReport={beginReport} />{reporting && <ReportModal creator={selected} onClose={() => setReporting(false)} />}{auth && <AuthModal mode={auth} onClose={closeAuth} onChangeMode={setAuth} onSuccess={completeAuth} />}</>;
+  if (view === "settings") return <>{shellHeader}<Settings creator={mine} onBack={goHome} onCreatorUpdated={(creator) => { setMine(creator); refreshDiscovery(); }} onDeleted={() => { setUser(null); setMine(null); goHome(); }} /></>;
+  if (view === "admin") return <>{shellHeader}{user?.is_admin ? <Moderation onBack={goHome} /> : <main className="legal-wrap"><p className="eyebrow">403</p><h1>Not authorized.</h1><p>This area is limited to site administrators.</p></main>}</>;
+  if (view === "privacy" || view === "terms" || view === "guidelines") return <>{shellHeader}<LegalPage kind={view} onBack={goHome} /></>;
+  if (view === "notfound") return <>{shellHeader}<main className="legal-wrap"><p className="eyebrow">404</p><h1>Page not found.</h1><p>The page you requested does not exist.</p><button className="secondary" onClick={goHome}>Go home</button></main></>;
+  if (view === "profile") return <>{shellHeader}{profileLoading ? <main className="profile-wrap profile-loading"><p className="eyebrow">CREATOR PROFILE</p><div className="profile-skeleton"><span /><div><i /><i /><i /></div></div></main> : profileError ? <main className="profile-wrap"><p className="empty">{profileError}</p><button className="secondary" onClick={goDiscover}>Back to discovery</button></main> : selected ? <Profile creator={selected} onBack={goDiscover} onReport={beginReport} /> : null}{reporting && selected && <ReportModal creator={selected} onClose={() => setReporting(false)} />}</>;
+  if (view === "home") return <>{shellHeader}<main><section className="intro home-intro"><p className="eyebrow">YOUR CREATOR DIRECTORY</p><h1>Find the work<br /><em>worth noticing early.</em></h1><p>Explore thoughtful work from emerging artists, builders, writers and more. No feeds. No follower-chasing.</p></section><section className="discovery discovery-preview"><div className="section-heading"><div><p className="eyebrow">DISCOVER</p><h2>A few creators to explore</h2></div><button className="discover-more" onClick={goDiscover}>Discover more <span>→</span></button></div><p className="section-copy">A small selection from the directory. Browse the full collection when you are ready.</p>{error ? <p className="empty">{error}</p> : loading && !creators.length ? <CreatorGridSkeleton /> : creators.length ? <div className="creator-grid creator-grid-preview">{creators.map((creator) => <CreatorCard key={creator.id} creator={creator} onOpen={openProfile} />)}</div> : <p className="empty">No published creators yet. Complete your profile to help get the directory started.</p>}</section></main><footer><div><button className="brand" onClick={goHome}>upnext<span>.</span></button><p>Discover emerging creative talent.</p></div><nav className="footer-links" aria-label="Legal"><a href="/privacy">Privacy</a><a href="/terms">Terms</a><a href="/community-guidelines">Community guidelines</a></nav></footer></>;
+  if (view === "discover") return <>{shellHeader}<main><section className="discover-page-heading"><p className="eyebrow">DISCOVER</p><h1>Find the work worth noticing early.</h1><p>Search emerging creators by their craft, skills, projects, and what they are looking for next.</p></section><section className="discovery discovery-full"><div className="discover-controls"><label className="search"><span>⌕</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search people, skills or projects" /></label><label className="sort-control"><span>Sort by</span><select value={sort} onChange={(event) => setSort(event.target.value)}><option value="discover">Curated discovery</option><option value="recent">Recently added</option><option value="complete">Profile depth</option></select></label></div><div className="filter-panel"><div><p>Browse by category</p><span>Refine the directory without changing its work-first ranking.</span></div><div className="filters"><button className={!category ? "active" : ""} onClick={() => setCategory("")}>All creators</button>{categories.map((value) => <button key={value} className={category === value ? "active" : ""} onClick={() => setCategory(value)}>{icons[value]} {value}</button>)}</div>{category && <button className="clear-filter" onClick={() => setCategory("")}>Clear {category}</button>}</div><div className="result-meta"><span>{loading ? "Updating results…" : `${total} creator${total === 1 ? "" : "s"}`}</span><span>{category ? `Showing ${category}` : "Work-first discovery, not popularity ranking."}</span></div>{error ? <p className="empty">{error}</p> : loading && !creators.length ? <CreatorGridSkeleton count={6} /> : creators.length ? <div className="creator-grid">{creators.map((creator) => <CreatorCard key={creator.id} creator={creator} onOpen={openProfile} />)}</div> : <p className="empty">No creators match those filters. Try a broader search.</p>}</section></main><footer><div><button className="brand" onClick={goHome}>upnext<span>.</span></button><p>Discover emerging creative talent.</p></div><nav className="footer-links" aria-label="Legal"><a href="/privacy">Privacy</a><a href="/terms">Terms</a><a href="/community-guidelines">Community guidelines</a></nav></footer></>;
   return <>{shellHeader}<main><section className="intro"><p className="eyebrow">DISCOVER WHAT'S NEXT</p><h1>Meet the creators<br /><em>before the crowd does.</em></h1><p>Explore thoughtful work from emerging artists, builders, writers and more. No feeds. No follower-chasing.</p></section><section className="discovery"><div className="toolbar"><label className="search"><span>⌕</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search people, skills or projects" /></label><select value={sort} onChange={(event) => setSort(event.target.value)}><option value="discover">Curated discovery</option><option value="recent">Recently added</option><option value="complete">Profile depth</option></select></div><div className="filters"><button className={!category ? "active" : ""} onClick={() => setCategory("")}>All</button>{categories.map((value) => <button key={value} className={category === value ? "active" : ""} onClick={() => setCategory(value)}>{icons[value]} {value}</button>)}</div><div className="result-meta"><span>{loading ? "Loading creators…" : `${total} creators`}</span><span>Work-first discovery, not popularity ranking.</span></div>{error ? <p className="empty">{error}</p> : loading ? <p className="empty">Loading the directory…</p> : creators.length ? <div className="creator-grid">{creators.map((creator) => <article className="creator-card" key={creator.id}><button className="card-hit" onClick={() => openProfile(creator)} aria-label={`View ${creator.displayName}`} /><div className="avatar">{creator.avatar || initials(creator.displayName)}</div><div className="card-body"><div className="card-top"><div><h3>{creator.displayName}</h3><p>@{creator.username}</p></div></div><div className="chips">{creator.categories.map((value) => <span key={value}>{icons[value]} {value}</span>)}</div><p className="bio">{creator.bio}</p><div className="card-footer"><span>{creator.socialAccounts[0]?.platform || "Portfolio"}</span>{creator.verifiedSocialCount > 0 && <small className="card-verification" title={verifiedAccountLabel(creator.verifiedSocialCount)}>✓ {creator.verifiedSocialCount} verified account{creator.verifiedSocialCount === 1 ? "" : "s"}</small>}{(creator.website || creator.socialAccounts[0]) && <a href={creator.website || creator.socialAccounts[0].profileUrl} onClick={(event) => event.stopPropagation()} target="_blank" rel="noreferrer">Visit work ↗</a>}</div></div></article>)}</div> : <p className="empty">No published creators yet. Create a complete profile to be the first.</p>}</section></main><footer><div><button className="brand" onClick={() => window.location.assign("/")}>upnext<span>.</span></button><p>Discover emerging creative talent.</p></div><nav className="footer-links" aria-label="Legal"><a href="/privacy">Privacy</a><a href="/terms">Terms</a><a href="/community-guidelines">Community guidelines</a></nav></footer>{auth && <AuthModal mode={auth} onClose={closeAuth} onChangeMode={setAuth} onSuccess={completeAuth} />}</>;
 }
